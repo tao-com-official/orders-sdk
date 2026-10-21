@@ -140,6 +140,56 @@ describe("authorOrder", () => {
   });
 });
 
+describe("getQuote", () => {
+  const quote = {
+    amount: [
+      { value: "990000000", currency: ROOT },
+      { value: "300.00", currency: "USD" },
+    ],
+    fees: [
+      {
+        amount: [
+          { value: "812723", currency: NATIVE },
+          { value: "0.325089", currency: "USD" },
+        ],
+        feeType: "TRANSACTION",
+        userPayable: true,
+      },
+    ],
+  };
+  const withQuotes = (quotes?: unknown[]) =>
+    hal(
+      200,
+      { _links: {}, order: stakeEnvelope, instruction, ...(quotes !== undefined ? { quotes } : {}) },
+      { "x-provenance-token": "prov-token" },
+    );
+  const request = {
+    source: { currency: NATIVE, amount: "1000000000" },
+    destination: { currency: ROOT, address: HOTKEY },
+    signerAddress: SIGNER,
+  };
+
+  it("returns the quote from a single author request and registers nothing", async () => {
+    const { fetch, calls } = fakeFetch(withQuotes([quote]));
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    await expect(client.getQuote(request)).resolves.toEqual(quote);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url.pathname).toBe("/orders/v2/order-intents");
+  });
+
+  it("exposes quotes on the authored order", async () => {
+    const { fetch } = fakeFetch(withQuotes([quote]));
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    expect((await client.authorOrder(request)).quotes).toEqual([quote]);
+  });
+
+  it("throws when the service returns no quote", async () => {
+    const { fetch } = fakeFetch(withQuotes());
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    await expect(client.getQuote(request)).rejects.toThrow(/no quote/);
+  });
+});
+
 describe("registerOrder", () => {
   it("sends idempotency and provenance headers and derives the order id", async () => {
     const { fetch, calls } = fakeFetch(hal(201, orderResponse()));

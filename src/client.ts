@@ -11,6 +11,7 @@ import type {
   OrderPage,
   OrderSummary,
   PlaceMarketOrderRequest,
+  Quote,
   SubmitAuthoredOptions,
   RegisterOrderRequest,
   StakeRootRequest,
@@ -100,6 +101,7 @@ export class OrderServiceClient {
       order: OrderEnvelope;
       instruction: Instruction;
       estimatedFees?: EstimatedFee[];
+      quotes?: Quote[];
     }>({
       method: "POST",
       path: `${BASE}/order-intents`,
@@ -136,7 +138,21 @@ export class OrderServiceClient {
       provenanceToken,
       ...(instructionHref !== undefined ? { instructionHref } : {}),
       ...(body.estimatedFees !== undefined ? { estimatedFees: body.estimatedFees } : {}),
+      ...(body.quotes !== undefined ? { quotes: body.quotes } : {}),
     };
+  }
+
+  /**
+   * Estimate what a swap pays out, without signing or opening anything. This authors the order
+   * (a dry run) and returns the service's quote: the destination amount after fees, in the
+   * destination currency, in TAO when that differs, and in USD. Throws if the service returns
+   * no quote for the pair.
+   */
+  async getQuote(input: AuthorOrderRequest): Promise<Quote> {
+    const { quotes } = await this.authorOrder(input);
+    const quote = quotes?.[0];
+    if (quote === undefined) throw new Error("order service returned no quote for this order");
+    return quote;
   }
 
   /** Register a signed order. Status `OPEN` on success; the matcher takes it from there. */

@@ -105,6 +105,17 @@ export interface EstimatedFee {
   userPayable: boolean;
 }
 
+/**
+ * What the order is expected to pay out, after fees. `amount` lists the destination currency
+ * first, then native TAO when that differs, then USD last. Every fee is subtracted, the subnet
+ * AMM fee (`userPayable: false`) included. It is an estimate from the pool as the service sees
+ * it now; the fill can differ as the price moves, bounded by `limitPrice` if you set one.
+ */
+export interface Quote {
+  amount: CurrencyAmount[];
+  fees: EstimatedFee[];
+}
+
 export interface AuthoredOrder {
   order: OrderEnvelope;
   instruction: Instruction;
@@ -117,6 +128,8 @@ export interface AuthoredOrder {
   provenanceToken: string;
   /** Absent for alpha↔alpha. Empty for TAO↔SN0 is possible. */
   estimatedFees?: EstimatedFee[];
+  /** What you receive after fees. Present for market orders; absent on older services. */
+  quotes?: Quote[];
 }
 
 // ---- register / read -------------------------------------------------------

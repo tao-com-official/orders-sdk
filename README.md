@@ -177,9 +177,21 @@ const order = await client.submitAuthored(authored, { signer: signInstruction })
 
 Dropping `authored` abandons the order at no cost: the provenance token is a signed, stateless claim that is only spent when an order is registered.
 
-The fee estimates are what the service returns before you sign; it does not estimate what you will receive. The authored instruction is built from the wallet's current nonce and chain state, so submit it promptly and author again if anything changed (another transaction from the wallet, a long wait).
+The fee estimates are what the service returns before you sign; for what you will receive, see the quote below. The authored instruction is built from the wallet's current nonce and chain state, so submit it promptly and author again if anything changed (another transaction from the wallet, a long wait).
 
 Each fee in `authored.estimatedFees` lists its amount in its own currency, a TAO conversion when it has one, and USD last; `userPayable: false` marks fees you do not pay (the subnet AMM fee). The helpers `netAfterFees`, `feesInCurrency` and `feesUsd` are exported.
+
+### Quoting what you receive
+
+`getQuote` estimates the payout of a swap without signing or opening anything. It authors the order (a dry run) and returns the service's quote: what you receive after every fee, in the destination currency, in native TAO when that differs, and in USD last. The fees behind it come with it.
+
+```ts
+const quote = await client.getQuote({ source, destination, signerAddress: coldkey });
+quote.amount;   // [{ currency: destination, value }, { currency: TAO, value }?, { currency: "USD", value }]
+quote.fees;     // the EstimatedFee[] that were subtracted, the subnet AMM fee included
+```
+
+The quote is an estimate from the pool as the service sees it now. The fill can differ as the price moves, bounded by the `limitPrice` you set. It needs the bearer token and `signerAddress`, like `authorOrder`, and is available for market orders. `authorOrder` returns the same thing as `authored.quotes`, so a review step can show it before `submitAuthored`.
 
 ### Fees and minimum sizes
 
