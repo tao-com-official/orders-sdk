@@ -1,6 +1,6 @@
 {
   "name": "@tao.com/orders-sdk",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "TypeScript SDK for the TAO order service.",
   "license": "MIT",
   "repository": {
