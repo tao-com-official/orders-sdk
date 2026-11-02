@@ -1,5 +1,5 @@
 import { AuthenticationError } from "./errors.js";
-import { DEFAULT_AUTH_BASE_URL, type FetchLike } from "./http.js";
+import { DEFAULT_AUTH_BASE_URL, trimTrailingSlashes, type FetchLike } from "./http.js";
 import { exchangeToken } from "./token-exchange.js";
 
 /**
@@ -100,7 +100,7 @@ function resolveAuthPath(tokenUri: string): string {
  */
 export function createWalletAuth(options: WalletAuthOptions): WalletAuth {
   const doFetch: FetchLike = options.fetch ?? ((input, init) => fetch(input, init));
-  const base = (options.authBaseUrl ?? DEFAULT_AUTH_BASE_URL).replace(/\/+$/, "");
+  const base = trimTrailingSlashes(options.authBaseUrl ?? DEFAULT_AUTH_BASE_URL);
   const now = options.now ?? Date.now;
   let session: Session | undefined;
   let inFlight: Promise<string> | undefined;
