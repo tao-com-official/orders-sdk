@@ -1,5 +1,5 @@
 import { AuthenticationError } from "./errors.js";
-import type { FetchLike } from "./http.js";
+import { DEFAULT_AUTH_BASE_URL, type FetchLike } from "./http.js";
 import { exchangeToken } from "./token-exchange.js";
 
 /**
@@ -11,10 +11,10 @@ export type ChallengeSigner = (message: Uint8Array) => Promise<string> | string;
 
 export interface WalletAuthOptions {
   /**
-   * Origin of the tao.com authentication service (`POST /auth`). The dev API gateway,
-   * `https://api.dev.tao.com`, serves it for every chain, testnet included.
+   * Origin of the tao.com authentication service (`POST /auth`). Default `https://api.tao.com`
+   * (production); pass `https://api.dev.tao.com` for testnet.
    */
-  authBaseUrl: string;
+  authBaseUrl?: string;
   /** SS58 wallet address. It becomes the token's `username`, which the orders API requires to equal `signerAddress`. */
   address: string;
   sign: ChallengeSigner;
@@ -100,7 +100,7 @@ function resolveAuthPath(tokenUri: string): string {
  */
 export function createWalletAuth(options: WalletAuthOptions): WalletAuth {
   const doFetch: FetchLike = options.fetch ?? ((input, init) => fetch(input, init));
-  const base = options.authBaseUrl.replace(/\/+$/, "");
+  const base = (options.authBaseUrl ?? DEFAULT_AUTH_BASE_URL).replace(/\/+$/, "");
   const now = options.now ?? Date.now;
   let session: Session | undefined;
   let inFlight: Promise<string> | undefined;

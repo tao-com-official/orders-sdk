@@ -1,3 +1,5 @@
+import type { PreflightWarning } from "./types.js";
+
 /** RFC 9457 problem body returned by the service. */
 export interface Problem {
   type: string;
@@ -6,6 +8,8 @@ export interface Problem {
   detail: string;
   field?: string;
   requestId?: string;
+  /** The failed checks on a `preflight-failed` (422). */
+  errors?: (PreflightWarning & { detail: string })[];
 }
 
 /** The service answered with a non-2xx status. */
@@ -27,6 +31,22 @@ export class OrderServiceError extends Error {
 
   get requestId(): string | undefined {
     return this.problem.requestId;
+  }
+}
+
+/**
+ * The order failed the service's pre-flight checks, so the SDK did not ask for a signature. Thrown
+ * by `placeMarketOrder` and `submitAuthored` when the authored order carries `warnings`. The
+ * service runs the same checks again on register and rejects with an `OrderServiceError`
+ * (`preflight-failed`, 422, `problem.errors`) if one fails then.
+ */
+export class PreflightError extends Error {
+  readonly warnings: PreflightWarning[];
+
+  constructor(warnings: PreflightWarning[]) {
+    super(`Order failed pre-flight checks: ${warnings.map((w) => w.code).join(", ")}`);
+    this.name = "PreflightError";
+    this.warnings = warnings;
   }
 }
 

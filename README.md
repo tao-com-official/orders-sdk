@@ -11,29 +11,24 @@ The SDK is ESM-only, has no runtime dependencies and uses the global `fetch` (No
 ## Quick start
 
 ```ts
-import { buyLimitPrice, createWalletAuth, OrderServiceClient, spotPrice } from "@tao.com/orders-sdk";
+import { createWalletAuth, OrderServiceClient } from "@tao.com/orders-sdk";
 
 const walletAuth = createWalletAuth({
-  authBaseUrl: "https://api.dev.tao.com",
   address: coldkey,                          // the wallet's SS58 address
   sign: (bytes) => wallet.signHex(bytes),    // the wallet's signature over the login challenge, as hex
 });
 
 const client = new OrderServiceClient({
-  baseUrl: "https://api.dev.tao.com",
   auth: () => walletAuth.getToken(),
-  network: "testnet",
 });
 
-// Stake 1 TAO into subnet 18, paying at most 1% over the current price.
-const spot = spotPrice({ taoIn, alphaIn });  // from the subnet's pool on chain
-
+// Stake 1 TAO into subnet 18, allowing at most 1% slippage against the current price.
 const order = await client.placeMarketOrder({
-  source: { currency: "urn:bittensor:testnet:native", amount: 1_000_000_000n },
+  source: { currency: "urn:bittensor:mainnet:native", amount: 1_000_000_000n },
   destination: {
-    currency: "urn:bittensor:testnet:alpha:18",
+    currency: "urn:bittensor:mainnet:alpha:18",
     address: hotkey,                         // the validator to stake with
-    limitPrice: buyLimitPrice(spot, 100),    // slippage limit, 100 basis points = 1%
+    limitPrice: 0.01,                        // max slippage as a fraction: 0.01 = 1%
   },
   signerAddress: coldkey,
   signer: signInstruction,                   // see "Signing"
@@ -44,10 +39,11 @@ console.log(order.id, order.status);         // "OPEN"
 
 `placeMarketOrder` does everything in order:
 
-1. asks the service to **author** the order. This is a dry run: it returns the unsigned instruction, a single-use provenance token and the fee estimates, and opens nothing;
-2. calls your `beforeSign` hook, if any, so you can refuse an order before anything is signed;
-3. calls your `signer` to sign the instruction;
-4. **registers** the signed order, which is what opens it.
+1. asks the service to **author** the order. This is a dry run: it returns the unsigned instruction, a single-use provenance token, the fee estimates and any pre-flight warnings, and opens nothing;
+2. throws `PreflightError` if the authored order has `warnings` (it failed a pre-flight check, so the service would reject it), before anything is signed;
+3. calls your `beforeSign` hook, if any, so you can refuse an order before anything is signed;
+4. calls your `signer` to sign the instruction;
+5. **registers** the signed order, which is what opens it.
 
 Amounts are integers in rao (1 TAO = `1_000_000_000`); pass a `bigint` or a digit string. Currencies are URNs: `urn:bittensor:<network>:native` for TAO and `urn:bittensor:<network>:alpha:<netuid>` for a subnet's alpha, where netuid `0` is Root.
 
@@ -71,7 +67,7 @@ Pass `delegate` and `getToken()` returns the delegate token. When it expires, th
 
 ```ts
 const walletAuth = createWalletAuth({
-  authBaseUrl, address, sign,
+  address, sign,
   delegate: {
     actorTokenType: "<a type the auth service supports>",
     actorToken: () => launchPayload(),       // read fresh on every exchange, do not pre-encode it
@@ -80,7 +76,7 @@ const walletAuth = createWalletAuth({
 });
 ```
 
-To exchange once by hand: `exchangeToken({ authBaseUrl, subjectToken, actorTokenType, actorToken, params })` returns `{ accessToken, tokenType, expiresIn }`. What `actorToken` must contain, and which `params` a type needs, is defined by the auth service. If it answers `invalid_grant` the wallet token was rejected; the SDK signs in again and retries once.
+To exchange once by hand: `exchangeToken({ subjectToken, actorTokenType, actorToken, params })` returns `{ accessToken, tokenType, expiresIn }`. What `actorToken` must contain, and which `params` a type needs, is defined by the auth service. If it answers `invalid_grant` the wallet token was rejected; the SDK signs in again and retries once.
 
 ## Signing
 
@@ -121,10 +117,10 @@ Every alpha leg needs `address`, the validator hotkey (SS58). The two legs of a 
 ```ts
 // Move stake from SN18 to SN44, keeping the validator. Both legs get the same hotkey.
 await client.placeMarketOrder({
-  source: { currency: "urn:bittensor:testnet:alpha:18", amount: 5_000_000_000n, address: hotkey },
+  source: { currency: "urn:bittensor:mainnet:alpha:18", amount: 5_000_000_000n, address: hotkey },
   destination: {
-    currency: "urn:bittensor:testnet:alpha:44",
-    limitPrice: swapLimitPrice({ origin: spot18, destination: spot44 }, 100),
+    currency: "urn:bittensor:mainnet:alpha:44",
+    limitPrice: 0.01,
   },
   signerAddress: coldkey,
   signer: signInstruction,
@@ -139,25 +135,18 @@ Pass `idempotencyKey` to `placeMarketOrder` (or `registerOrder`) to make a retry
 
 ## Slippage limits
 
-Market orders carry a `limitPrice` on one leg for some swaps. It is enforced on chain: if the price moved past it, the transaction fails and nothing fills. Prices are integers scaled by 1e9 (`1000000000` means 1). When a required limit is missing the service answers 422 and names the field.
+Market orders carry a `limitPrice` on one leg for some swaps. It is the maximum slippage against the current subnet price, as a fraction from 0 to 1: `0.05` means the price may move at most 5%. The service simulates the order against it and turns it into the price limit the extrinsic enforces on chain: if the price moved past it, the transaction fails and nothing fills. When a required limit is missing the service answers 422 and names the field.
 
-| Swap | `limitPrice` goes on | Meaning |
-| --- | --- | --- |
-| TAO to subnet alpha | `destination` | the most you will pay per alpha, in rao of TAO |
-| Subnet alpha to TAO | `source` | the least you will accept per alpha |
-| Alpha to other alpha, Root included | `destination` | the minimum destination alpha per origin alpha, ×1e9 |
-| TAO to or from Root, same-subnet validator move | not needed | |
+| Swap | `limitPrice` goes on |
+| --- | --- |
+| TAO to subnet alpha | `destination` |
+| Subnet alpha to TAO | `source` |
+| Alpha to other alpha, Root included | `destination` |
+| TAO to or from Root, same-subnet validator move | not needed |
 
-These pure helpers (no I/O) turn a price and a tolerance in basis points (100 = 1%) into a limit:
+A limit that is too tight makes the order fail on chain and still costs the network fee, so leave room for the price to move between authoring and execution.
 
-```ts
-spotPrice({ taoIn, alphaIn });                               // rao of TAO per alpha, ×1e9
-buyLimitPrice(spot, 100);                                    // TAO to alpha: spot + 1%
-sellLimitPrice(spot, 100);                                   // alpha to TAO: spot − 1%
-swapLimitPrice({ origin: spotA, destination: spotB }, 500);  // alpha to alpha: ratio − 5%
-```
-
-Read `taoIn` and `alphaIn` from the chain (`SubtensorModule.SubnetTAO` and `SubnetAlphaIn`). Root has no pool: its price is the constant `ROOT_PRICE` (1e9), so use that in `swapLimitPrice` for a Root leg. A limit that is too tight makes the order fail on chain and still costs the network fee, so leave room for the price to move between authoring and execution.
+`spotPrice({ taoIn, alphaIn })` (rao of TAO per alpha, ×1e9) is still exported for showing prices. Read `taoIn` and `alphaIn` from the chain (`SubtensorModule.SubnetTAO` and `SubnetAlphaIn`); Root has no pool, its price is the constant `ROOT_PRICE`.
 
 ## Reviewing before you submit
 
@@ -183,12 +172,13 @@ Each fee in `authored.estimatedFees` lists its amount in its own currency, a TAO
 
 ### Quoting what you receive
 
-`getQuote` estimates the payout of a swap without signing or opening anything. It authors the order (a dry run) and returns the service's quote: what you receive after every fee, in the destination currency, in native TAO when that differs, and in USD last. The fees behind it come with it.
+`getQuote` estimates the payout of a swap without signing or opening anything. It authors the order (a dry run) and returns the service's quote: what you receive after every fee, in the destination currency, in native TAO when that differs, and in USD last. The fees behind it come with it. Give `destination.amount` instead of `source.amount` and the quote is reversed: what you pay to receive that amount, in the source currency first.
 
 ```ts
 const quote = await client.getQuote({ source, destination, signerAddress: coldkey });
 quote.amount;   // [{ currency: destination, value }, { currency: TAO, value }?, { currency: "USD", value }]
 quote.fees;     // the EstimatedFee[] that were subtracted, the subnet AMM fee included
+quote.warnings; // failed pre-flight checks, e.g. SLIPPAGE_EXCEEDED; [] when none
 ```
 
 The quote is an estimate from the pool as the service sees it now. The fill can differ as the price moves, bounded by the `limitPrice` you set. It needs the bearer token and `signerAddress`, like `authorOrder`, and is available for market orders. `authorOrder` returns the same thing as `authored.quotes`, so a review step can show it before `submitAuthored`.
@@ -244,12 +234,13 @@ while (page.nextCursor) page = await client.listOrders({ cursor: page.nextCursor
 
 ## Errors
 
-Failures throw one of three classes:
+Failures throw one of four classes:
 
 | Class | When |
 | --- | --- |
 | `OrderServiceError` | The service answered with a problem (RFC 9457). Has `status`, `code`, `problem` (with `field` for a bad input) and `requestId`. |
 | `OrderServiceNetworkError` | No usable response: a network failure, a timeout, or an error that did not come from the service, such as the gateway rejecting a token. Has `status` when a response arrived. |
+| `PreflightError` | The authored order failed a pre-flight check, so the SDK did not ask for a signature. Has `warnings`. |
 | `AuthenticationError` | Login, refresh or token exchange failed. `code` is `UNAUTHORIZED`, `HTTP_ERROR`, `NETWORK_ERROR` or `PROTOCOL`; `oauthError` carries the exchange's OAuth code. |
 
 `OrderServiceError.code` is the last segment of the problem type:
@@ -260,6 +251,7 @@ Failures throw one of three classes:
 | `invalid-address` | 422 | An address is not valid SS58. |
 | `unsupported-swap`, `same-asset` | 422 | The pair is not supported. |
 | `invalid-provenance` | 403 | The provenance token does not match the order, or was already used. Author again. |
+| `preflight-failed` | 422 | The order failed a pre-flight check when it was registered; see `problem.errors`. Nothing was submitted. |
 | `invalid-signature` | 422 | The signature does not verify, or the call or era differs from what was authored. |
 | `forbidden` | 403 | The token's `username` is not the order's `signerAddress`. |
 | `idempotency-conflict` | 409 | The idempotency key was used with a different order. |
@@ -284,13 +276,20 @@ Amount and limit arguments are checked before any request is sent, and throw a `
 
 ```ts
 new OrderServiceClient({
-  baseUrl: "https://api.dev.tao.com",  // the service origin; routes live under /orders/v2
+  baseUrl: "https://api.tao.com",      // the service origin, default production; routes live under /orders/v2
   auth: () => walletAuth.getToken(),   // a token string, or a function called on every request
-  network: "testnet",                  // "mainnet" (default) or "testnet": picks URNs for the Root helpers
+  network: "mainnet",                  // "mainnet" (default) or "testnet": picks URNs for the Root helpers
   hotkey: myValidatorHotkey,           // used for an alpha leg that has no `address`
   timeoutMs: 30_000,                   // per request, default 30s
   fetch: customFetch,                  // defaults to the global fetch
 });
+```
+
+Every option is optional. Out of the box the client and `createWalletAuth` talk to production (`https://api.tao.com`, exported as `DEFAULT_BASE_URL` and `DEFAULT_AUTH_BASE_URL`) on mainnet. For testnet, override all three:
+
+```ts
+const walletAuth = createWalletAuth({ authBaseUrl: "https://api.dev.tao.com", address, sign });
+const client = new OrderServiceClient({ baseUrl: "https://api.dev.tao.com", network: "testnet", auth: () => walletAuth.getToken() });
 ```
 
 ## License

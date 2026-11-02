@@ -1,4 +1,5 @@
-import { Http, type AuthSource, type FetchLike } from "./http.js";
+import { PreflightError } from "./errors.js";
+import { DEFAULT_BASE_URL, Http, type AuthSource, type FetchLike } from "./http.js";
 import type {
   Amount,
   AuthoredOrder,
@@ -11,6 +12,7 @@ import type {
   OrderPage,
   OrderSummary,
   PlaceMarketOrderRequest,
+  PreflightWarning,
   Quote,
   SubmitAuthoredOptions,
   RegisterOrderRequest,
@@ -20,8 +22,11 @@ import type {
 export type Network = "mainnet" | "testnet";
 
 export interface OrderServiceClientOptions {
-  /** Service origin, e.g. `https://api.dev.tao.com`. Routes are under `/orders/v2`. */
-  baseUrl: string;
+  /**
+   * Service origin. Default `https://api.tao.com` (production); pass `https://api.dev.tao.com`
+   * for testnet. Routes are under `/orders/v2`.
+   */
+  baseUrl?: string;
   /**
    * Bearer JWT whose `username` claim is the signer's coldkey SS58. A function is called
    * per request so tokens can be refreshed.
@@ -49,6 +54,18 @@ function wireAmount(value: Amount, field: string): string {
     throw new RangeError(`${field} must be a non-negative integer, got ${JSON.stringify(value)}`);
   }
   return text;
+}
+
+function wireSlippage(value: number, field: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new RangeError(`${field} must be a slippage fraction from 0 to 1, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+/** Signing an order with warnings is wasted: register re-runs the checks and rejects it. */
+function assertPreflight(authored: AuthoredOrder): void {
+  if (authored.warnings.length > 0) throw new PreflightError(authored.warnings);
 }
 
 /**
@@ -79,11 +96,11 @@ export class OrderServiceClient {
   private readonly network: Network;
   private readonly defaultHotkey: string | undefined;
 
-  constructor(options: OrderServiceClientOptions) {
+  constructor(options: OrderServiceClientOptions = {}) {
     this.network = options.network ?? "mainnet";
     this.defaultHotkey = options.hotkey;
     this.http = new Http({
-      baseUrl: options.baseUrl,
+      baseUrl: options.baseUrl ?? DEFAULT_BASE_URL,
       auth: options.auth,
       fetch: options.fetch ?? ((input, init) => fetch(input, init)),
       timeoutMs: options.timeoutMs ?? 30_000,
@@ -93,15 +110,21 @@ export class OrderServiceClient {
   /**
    * Ask the service for the unsigned instruction. Market order: no `limit` is sent.
    * Sign `instruction`, then call `registerOrder` with the returned `order` and `provenanceToken`.
+   * With `destination.amount` (receive-side) the returned `order.source.amount` is the solved
+   * amount the signed instruction spends.
    */
   async authorOrder(input: AuthorOrderRequest): Promise<AuthoredOrder> {
     const request = this.withHotkey(input);
+    if ((request.source.amount === undefined) === (request.destination.amount === undefined)) {
+      throw new RangeError("Set exactly one of source.amount or destination.amount");
+    }
     const { body, headers } = await this.http.request<{
       _links?: { instruction?: { href?: string } };
       order: OrderEnvelope;
       instruction: Instruction;
       estimatedFees?: EstimatedFee[];
       quotes?: Quote[];
+      warnings?: PreflightWarning[];
     }>({
       method: "POST",
       path: `${BASE}/order-intents`,
@@ -109,19 +132,24 @@ export class OrderServiceClient {
       body: {
         source: {
           currency: request.source.currency,
-          amount: wireAmount(request.source.amount, "source.amount"),
+          ...(request.source.amount !== undefined
+            ? { amount: wireAmount(request.source.amount, "source.amount") }
+            : {}),
           ...(request.source.address !== undefined ? { address: request.source.address } : {}),
           ...(request.source.limitPrice !== undefined
-            ? { limitPrice: wireAmount(request.source.limitPrice, "source.limitPrice") }
+            ? { limitPrice: wireSlippage(request.source.limitPrice, "source.limitPrice") }
             : {}),
         },
         destination: {
           currency: request.destination.currency,
+          ...(request.destination.amount !== undefined
+            ? { amount: wireAmount(request.destination.amount, "destination.amount") }
+            : {}),
           ...(request.destination.address !== undefined
             ? { address: request.destination.address }
             : {}),
           ...(request.destination.limitPrice !== undefined
-            ? { limitPrice: wireAmount(request.destination.limitPrice, "destination.limitPrice") }
+            ? { limitPrice: wireSlippage(request.destination.limitPrice, "destination.limitPrice") }
             : {}),
         },
         signerAddress: request.signerAddress,
@@ -139,6 +167,7 @@ export class OrderServiceClient {
       ...(instructionHref !== undefined ? { instructionHref } : {}),
       ...(body.estimatedFees !== undefined ? { estimatedFees: body.estimatedFees } : {}),
       ...(body.quotes !== undefined ? { quotes: body.quotes } : {}),
+      warnings: body.warnings ?? [],
     };
   }
 
@@ -147,15 +176,23 @@ export class OrderServiceClient {
    * (a dry run) and returns the service's quote: the destination amount after fees, in the
    * destination currency, in TAO when that differs, and in USD. Throws if the service returns
    * no quote for the pair.
+   *
+   * A quote that fails a pre-flight check still comes back, with `warnings` (for example
+   * `SLIPPAGE_EXCEEDED` when the simulated slippage is beyond `limitPrice`). Check them before
+   * asking the user to sign: such an order would be rejected.
    */
-  async getQuote(input: AuthorOrderRequest): Promise<Quote> {
-    const { quotes } = await this.authorOrder(input);
+  async getQuote(input: AuthorOrderRequest): Promise<Quote & { warnings: PreflightWarning[] }> {
+    const { quotes, warnings } = await this.authorOrder(input);
     const quote = quotes?.[0];
     if (quote === undefined) throw new Error("order service returned no quote for this order");
-    return quote;
+    return { ...quote, warnings };
   }
 
-  /** Register a signed order. Status `OPEN` on success; the matcher takes it from there. */
+  /**
+   * Register a signed order. Status `OPEN` on success; the matcher takes it from there. The
+   * service re-runs the pre-flight checks first: if one fails it throws `OrderServiceError` with
+   * code `preflight-failed` (422) and the failed checks in `problem.errors`.
+   */
   async registerOrder(request: RegisterOrderRequest): Promise<Order> {
     const { body } = await this.http.request<Omit<Order, "id">>({
       method: "POST",
@@ -227,6 +264,7 @@ export class OrderServiceClient {
   async placeMarketOrder(request: PlaceMarketOrderRequest): Promise<Order> {
     const { signer, idempotencyKey, sourceSystem, beforeSign, ...authorRequest } = request;
     const authored = await this.authorOrder(authorRequest);
+    assertPreflight(authored);
     await beforeSign?.(authored);
     return this.submitAuthored(authored, {
       signer,
@@ -237,9 +275,10 @@ export class OrderServiceClient {
 
   /**
    * Sign an authored order and post it back to the instruction link it returned. This is the step
-   * that opens the order.
+   * that opens the order. Throws `PreflightError`, before signing, if the order carries `warnings`.
    */
   async submitAuthored(authored: AuthoredOrder, options: SubmitAuthoredOptions): Promise<Order> {
+    assertPreflight(authored);
     const signedInstruction = await options.signer(authored.instruction, {
       signerAddress: authored.order.signerAddress,
       order: authored.order,
@@ -293,13 +332,14 @@ export class OrderServiceClient {
         "No validator hotkey: pass `hotkey` (or an address on the alpha leg), or set `hotkey` on the client.",
       );
     }
+    // Only addresses change, so the amounts stay on the leg they were on.
     return {
       ...request,
       source: isAlpha(request.source.currency) ? { ...request.source, address: hotkey } : request.source,
       destination: isAlpha(request.destination.currency)
         ? { ...request.destination, address: hotkey }
         : request.destination,
-    };
+    } as AuthorOrderRequest;
   }
 
   private nativeUrn(): string {

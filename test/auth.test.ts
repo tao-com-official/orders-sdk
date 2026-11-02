@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { AuthenticationError, createWalletAuth } from "../src/index.js";
+import { AuthenticationError, createWalletAuth, DEFAULT_AUTH_BASE_URL } from "../src/index.js";
 
 const BASE = "https://auth.test";
 const ADDRESS = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
@@ -56,6 +56,18 @@ function make(handlers: Handler[], extra: { now?: () => number; sign?: (m: Uint8
 }
 
 describe("login", () => {
+  it("defaults to the production auth service when no authBaseUrl is given", async () => {
+    const urls: string[] = [];
+    const fetch = vi.fn(async (input: URL | string | Request) => {
+      urls.push(input.toString());
+      return urls.length === 1 ? challenge()({} as Call) : tokens("access-1")({} as Call);
+    }) as unknown as typeof globalThis.fetch;
+    const auth = createWalletAuth({ address: ADDRESS, sign: () => "0x01", fetch });
+    await expect(auth.getToken()).resolves.toBe("access-1");
+    expect(urls).toEqual([`${DEFAULT_AUTH_BASE_URL}/auth`, `${DEFAULT_AUTH_BASE_URL}/auth/challenge`]);
+    expect(DEFAULT_AUTH_BASE_URL).toBe("https://api.tao.com");
+  });
+
   it("new wallet: posts token_uri verbatim and signs the decoded nonce bytes", async () => {
     const sign = vi.fn((_m: Uint8Array) => "abcd");
     const { auth, calls } = make([challenge("/auth/challenge?nonce=XYZ&type=SS58_42"), tokens("jwt-1")], { sign });

@@ -1,6 +1,11 @@
 import { OrderServiceError, OrderServiceNetworkError, type Problem } from "./errors.js";
 
 export type FetchLike = typeof fetch;
+
+/** The production tao.com order service, used when `baseUrl` is not given. */
+export const DEFAULT_BASE_URL = "https://api.tao.com";
+/** The production tao.com authentication service, used when `authBaseUrl` is not given. */
+export const DEFAULT_AUTH_BASE_URL = "https://api.tao.com";
 export type AuthSource = string | (() => string | Promise<string>);
 
 export interface HttpOptions {

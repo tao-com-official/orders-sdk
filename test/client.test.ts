@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DEFAULT_BASE_URL,
   OrderServiceClient,
   OrderServiceError,
   OrderServiceNetworkError,
+  PreflightError,
   TAO_COM_VALIDATOR_HOTKEYS,
+  type AuthorOrderRequest,
   type InstructionSigner,
 } from "../src/index.js";
 
@@ -172,15 +175,32 @@ describe("getQuote", () => {
   it("returns the quote from a single author request and registers nothing", async () => {
     const { fetch, calls } = fakeFetch(withQuotes([quote]));
     const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
-    await expect(client.getQuote(request)).resolves.toEqual(quote);
+    await expect(client.getQuote(request)).resolves.toEqual({ ...quote, warnings: [] });
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url.pathname).toBe("/orders/v2/order-intents");
+  });
+
+  it("defaults to the production service when no baseUrl is given", async () => {
+    const { fetch, calls } = fakeFetch(withQuotes([quote]));
+    const client = new OrderServiceClient({ auth: "jwt", fetch });
+    await client.getQuote(request);
+    expect(calls[0]?.url.origin).toBe(DEFAULT_BASE_URL);
+    expect(DEFAULT_BASE_URL).toBe("https://api.tao.com");
   });
 
   it("exposes quotes on the authored order", async () => {
     const { fetch } = fakeFetch(withQuotes([quote]));
     const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
     expect((await client.authorOrder(request)).quotes).toEqual([quote]);
+  });
+
+  it("returns the quote with its pre-flight warnings", async () => {
+    const warnings = [{ code: "SLIPPAGE_EXCEEDED", maximumAmount: "400000000" }];
+    const { fetch } = fakeFetch(
+      hal(200, { _links: {}, order: stakeEnvelope, instruction, quotes: [quote], warnings }, { "x-provenance-token": "prov-token" }),
+    );
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    await expect(client.getQuote(request)).resolves.toEqual({ ...quote, warnings });
   });
 
   it("throws when the service returns no quote", async () => {
@@ -454,40 +474,99 @@ describe("slippage limits and legs", () => {
   const authorWith = (envelope: object) =>
     hal(200, { _links: { instruction: { href: `${BASE}/orders/v2/orders` } }, order: envelope, instruction }, { "x-provenance-token": "prov-token" });
 
-  it("sends limitPrice on the leg it is set on (bigint or digits), and only there", async () => {
+  it("sends limitPrice as a slippage fraction (a JSON number) on the leg it is set on, and only there", async () => {
     const { fetch, calls } = fakeFetch(authorWith(envelopeOf({ type: "tao_to_alpha" })));
     const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
     await client.authorOrder({
       source: { currency: NATIVE, amount: "1000000000" },
-      destination: { currency: ALPHA1, address: HOTKEY, limitPrice: 1_050_000_000n },
+      destination: { currency: ALPHA1, address: HOTKEY, limitPrice: 0.05 },
       signerAddress: SIGNER,
     });
     expect(calls[0]?.body).toEqual({
       source: { currency: NATIVE, amount: "1000000000" },
-      destination: { currency: ALPHA1, address: HOTKEY, limitPrice: "1050000000" },
+      destination: { currency: ALPHA1, address: HOTKEY, limitPrice: 0.05 },
       signerAddress: SIGNER,
     });
 
     const sell = fakeFetch(authorWith(envelopeOf({ type: "alpha_to_tao" })));
     await new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch: sell.fetch }).authorOrder({
-      source: { currency: ALPHA1, amount: "5", address: HOTKEY, limitPrice: "950000000" },
+      source: { currency: ALPHA1, amount: "5", address: HOTKEY, limitPrice: 0.01 },
       destination: { currency: NATIVE },
       signerAddress: SIGNER,
     });
-    expect(sell.calls[0]?.body).toMatchObject({ source: { limitPrice: "950000000" } });
+    expect(sell.calls[0]?.body).toMatchObject({ source: { limitPrice: 0.01 } });
     expect(sell.calls[0]?.body).not.toHaveProperty("destination.limitPrice");
   });
 
-  it("rejects a malformed limitPrice before any request", async () => {
+  it("sends destination.amount and no source.amount for a receive-side order", async () => {
+    const { fetch, calls } = fakeFetch(authorWith(envelopeOf({ type: "tao_to_alpha" })));
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    await client.authorOrder({
+      source: { currency: NATIVE },
+      destination: { currency: ALPHA1, amount: 955_213_031n, address: HOTKEY, limitPrice: 0.05 },
+      signerAddress: SIGNER,
+    });
+    expect(calls[0]?.body).toEqual({
+      source: { currency: NATIVE },
+      destination: { currency: ALPHA1, amount: "955213031", address: HOTKEY, limitPrice: 0.05 },
+      signerAddress: SIGNER,
+    });
+  });
+
+  it("requires exactly one of source.amount and destination.amount, before any request", async () => {
     const { fetch } = fakeFetch();
     const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    const both = {
+      source: { currency: NATIVE, amount: "1" },
+      destination: { currency: ALPHA1, amount: "1", address: HOTKEY },
+      signerAddress: SIGNER,
+    } as unknown as AuthorOrderRequest;
+    const neither = {
+      source: { currency: NATIVE },
+      destination: { currency: ALPHA1, address: HOTKEY },
+      signerAddress: SIGNER,
+    } as unknown as AuthorOrderRequest;
+    await expect(client.authorOrder(both)).rejects.toThrow(/exactly one of source.amount or destination.amount/);
+    await expect(client.authorOrder(neither)).rejects.toThrow(/exactly one of source.amount or destination.amount/);
     await expect(
       client.authorOrder({
-        source: { currency: NATIVE, amount: "1" },
-        destination: { currency: ALPHA1, address: HOTKEY, limitPrice: "1.05" },
+        source: { currency: NATIVE },
+        destination: { currency: ALPHA1, amount: "1.5", address: HOTKEY },
         signerAddress: SIGNER,
       }),
-    ).rejects.toThrow(/destination.limitPrice/);
+    ).rejects.toThrow(/destination.amount/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("registers a receive-side envelope verbatim, both amounts included", async () => {
+    const envelope = envelopeOf({
+      type: "tao_to_alpha",
+      source: { currency: NATIVE, amount: "1000000000" },
+      destination: { currency: ALPHA1, amount: "955213031", address: HOTKEY, limitPrice: 0.05 },
+    });
+    const { fetch, calls } = fakeFetch(authorWith(envelope), hal(201, orderResponse()));
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    await client.placeMarketOrder({
+      source: { currency: NATIVE },
+      destination: { currency: ALPHA1, amount: "955213031", address: HOTKEY, limitPrice: 0.05 },
+      signerAddress: SIGNER,
+      signer,
+    });
+    expect((calls[1]?.body as { order: unknown }).order).toEqual(envelope);
+  });
+
+  it("rejects a limitPrice outside 0..1 before any request", async () => {
+    const { fetch } = fakeFetch();
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    for (const bad of [1.05, -0.01, Number.NaN, Number.POSITIVE_INFINITY, "0.05" as unknown as number]) {
+      await expect(
+        client.authorOrder({
+          source: { currency: NATIVE, amount: "1" },
+          destination: { currency: ALPHA1, address: HOTKEY, limitPrice: bad },
+          signerAddress: SIGNER,
+        }),
+      ).rejects.toThrow(/destination.limitPrice must be a slippage fraction/);
+    }
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -495,7 +574,7 @@ describe("slippage limits and legs", () => {
     const a = fakeFetch(authorWith(envelopeOf({ type: "alpha_swap_move" })));
     await new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch: a.fetch }).authorOrder({
       source: { currency: ALPHA1, amount: "5", address: HOTKEY },
-      destination: { currency: ALPHA2, address: OTHER, limitPrice: "1000000000" },
+      destination: { currency: ALPHA2, address: OTHER, limitPrice: 0.05 },
       signerAddress: SIGNER,
     });
     const body = a.calls[0]?.body as { source: { address: string }; destination: { address: string } };
@@ -505,7 +584,7 @@ describe("slippage limits and legs", () => {
     const b = fakeFetch(authorWith(envelopeOf({ type: "alpha_swap" })));
     await new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch: b.fetch }).authorOrder({
       source: { currency: ALPHA1, amount: "5", address: HOTKEY },
-      destination: { currency: ALPHA2, limitPrice: "1000000000" },
+      destination: { currency: ALPHA2, limitPrice: 0.05 },
       signerAddress: SIGNER,
     });
     expect((b.calls[0]?.body as { destination: { address: string } }).destination.address).toBe(HOTKEY);
@@ -514,17 +593,81 @@ describe("slippage limits and legs", () => {
   it("registers the authored envelope verbatim, limitPrice included", async () => {
     const envelope = envelopeOf({
       type: "tao_to_alpha",
-      destination: { currency: ALPHA1, address: HOTKEY, limitPrice: "1050000000" },
+      destination: { currency: ALPHA1, address: HOTKEY, limitPrice: 0.05 },
     });
     const { fetch, calls } = fakeFetch(authorWith(envelope), hal(201, orderResponse()));
     const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
     await client.placeMarketOrder({
       source: { currency: NATIVE, amount: "1000000000" },
-      destination: { currency: ALPHA1, address: HOTKEY, limitPrice: "1050000000" },
+      destination: { currency: ALPHA1, address: HOTKEY, limitPrice: 0.05 },
       signerAddress: SIGNER,
       signer,
     });
     expect((calls[1]?.body as { order: unknown }).order).toEqual(envelope);
+  });
+});
+
+describe("pre-flight checks", () => {
+  const warned = (warnings: unknown[]) =>
+    hal(
+      200,
+      { _links: { instruction: { href: `${BASE}/orders/v2/orders` } }, order: stakeEnvelope, instruction, warnings },
+      { "x-provenance-token": "prov-token" },
+    );
+  const request = {
+    source: { currency: NATIVE, amount: "1000000000" },
+    destination: { currency: ROOT, address: HOTKEY },
+    signerAddress: SIGNER,
+  };
+
+  it("authorOrder returns the warnings, and an empty list when there are none", async () => {
+    const { fetch } = fakeFetch(warned([{ code: "FEES_EXCEED_AMOUNT", minimumAmount: "2000000" }]), authorResponse());
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    expect((await client.authorOrder(request)).warnings).toEqual([{ code: "FEES_EXCEED_AMOUNT", minimumAmount: "2000000" }]);
+    expect((await client.authorOrder(request)).warnings).toEqual([]);
+  });
+
+  it("placeMarketOrder throws PreflightError on warnings, before beforeSign and the signer", async () => {
+    const { fetch, calls } = fakeFetch(warned([{ code: "SLIPPAGE_EXCEEDED", maximumAmount: "1" }]));
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    const sign = vi.fn(signer);
+    const beforeSign = vi.fn();
+    const error = await client.placeMarketOrder({ ...request, signer: sign, beforeSign }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(PreflightError);
+    expect((error as PreflightError).warnings).toEqual([{ code: "SLIPPAGE_EXCEEDED", maximumAmount: "1" }]);
+    expect((error as Error).message).toMatch(/SLIPPAGE_EXCEEDED/);
+    expect(beforeSign).not.toHaveBeenCalled();
+    expect(sign).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("submitAuthored refuses an authored order with warnings", async () => {
+    const { fetch, calls } = fakeFetch(warned([{ code: "INSUFFICIENT_BALANCE" }]));
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    const authored = await client.authorOrder(request);
+    await expect(client.submitAuthored(authored, { signer })).rejects.toBeInstanceOf(PreflightError);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("surfaces a register 422 preflight-failed with its errors", async () => {
+    const problem = {
+      type: `${BASE}/problems/preflight-failed`,
+      title: "Preflight failed",
+      status: 422,
+      detail: "Order failed preflight checks",
+      requestId: "req-1",
+      errors: [{ code: "INSUFFICIENT_BALANCE", detail: "Free balance is less than the source amount" }],
+    };
+    const { fetch } = fakeFetch(
+      authorResponse(),
+      new Response(JSON.stringify(problem), { status: 422, headers: { "content-type": "application/problem+json" } }),
+    );
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    const error = await client.placeMarketOrder({ ...request, signer }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OrderServiceError);
+    expect((error as OrderServiceError).status).toBe(422);
+    expect((error as OrderServiceError).code).toBe("preflight-failed");
+    expect((error as OrderServiceError).problem.errors).toEqual(problem.errors);
   });
 });
 
