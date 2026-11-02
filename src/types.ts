@@ -48,32 +48,37 @@ export interface HalLink {
  * including SN0 (root). The two legs may carry different hotkeys: that is how a move between
  * validators is expressed.
  *
- * `limitPrice` is the slippage limit the extrinsic enforces on chain (it fails instead of filling
- * worse). The service requires it on exactly one leg for some order types:
+ * `limitPrice` is the maximum slippage against the current subnet price, as a fraction from 0 to 1
+ * (`0.05` = 5%). The service simulates the order against it, and the extrinsic it authors fails on
+ * chain instead of filling worse. It is required on exactly one leg for some order types:
  *
- * | Order type                          | Where           | Meaning                                        |
- * |-------------------------------------|-----------------|------------------------------------------------|
- * | `tao_to_alpha`                      | destination leg | maximum price to pay, rao of TAO per alpha     |
- * | `alpha_to_tao`                      | source leg      | minimum price to accept, rao of TAO per alpha  |
- * | `alpha_swap`, `alpha_swap_move`     | destination leg | minimum destination alpha per origin alpha, ×1e9 |
+ * | Order type                          | Where           |
+ * |-------------------------------------|-----------------|
+ * | `tao_to_alpha`                      | destination leg |
+ * | `alpha_to_tao`                      | source leg      |
+ * | `alpha_swap`, `alpha_swap_move`     | destination leg |
  *
- * Any swap between two different alpha legs is an `alpha_swap`, Root (SN0) included (priced at 1 TAO,
- * `ROOT_PRICE`). Not needed for `tao_to_sn0`, `sn0_to_tao` or `alpha_move`.
- * Prices are scaled by 1e9, so `1000000000` means 1. See `buyLimitPrice`, `sellLimitPrice` and
- * `swapLimitPrice` to derive one from a spot price and a slippage tolerance.
+ * Any swap between two different alpha legs is an `alpha_swap`, Root (SN0) included. Not needed
+ * for `tao_to_sn0`, `sn0_to_tao` or `alpha_move`.
  */
 export interface OrderLegInput {
   currency: string;
   address?: string;
-  limitPrice?: Amount;
+  limitPrice?: number;
 }
 
-export interface AuthorOrderRequest {
-  source: OrderLegInput & { amount: Amount };
-  destination: OrderLegInput;
+/**
+ * Set the amount on exactly one leg. `source.amount` spends that much. `destination.amount` is a
+ * receive-side order: the service solves for the smallest source amount that, after every fee,
+ * pays out at least that much, and the authored order carries both amounts.
+ */
+export type AuthorOrderRequest = {
   /** Coldkey SS58. Must equal the `username` claim of the bearer token. */
   signerAddress: string;
-}
+} & (
+  | { source: OrderLegInput & { amount: Amount }; destination: OrderLegInput & { amount?: never } }
+  | { source: OrderLegInput & { amount?: never }; destination: OrderLegInput & { amount: Amount } }
+);
 
 export interface RawInstruction {
   type: "RAW";
@@ -93,8 +98,9 @@ export type Instruction = RawInstruction | SubstrateExtrinsicInstruction;
 /** The order envelope. Authored by the service, repeated verbatim on register. */
 export interface OrderEnvelope {
   type: MarketOrderType;
-  source: { currency: string; amount: string; address?: string; limitPrice?: string };
-  destination: { currency: string; address?: string; limitPrice?: string };
+  source: { currency: string; amount: string; address?: string; limitPrice?: number };
+  /** `amount` is set on a receive-side order: the amount asked for. */
+  destination: { currency: string; amount?: string; address?: string; limitPrice?: number };
   signerAddress: string;
 }
 
@@ -110,10 +116,41 @@ export interface EstimatedFee {
  * first, then native TAO when that differs, then USD last. Every fee is subtracted, the subnet
  * AMM fee (`userPayable: false`) included. It is an estimate from the pool as the service sees
  * it now; the fill can differ as the price moves, bounded by `limitPrice` if you set one.
+ *
+ * On a receive-side order (`destination.amount`) it is the other way round: `amount` is what you
+ * pay, in the source currency first, every fee added.
  */
 export interface Quote {
   amount: CurrencyAmount[];
   fees: EstimatedFee[];
+}
+
+/**
+ * The pre-flight check codes. `SLIPPAGE_EXCEEDED`: the simulated slippage is beyond `limitPrice`.
+ * `DESTINATION_AMOUNT_TOO_LOW`, `FEES_EXCEED_AMOUNT`: the amount is too small (see `minimumAmount`).
+ */
+export type PreflightCode =
+  | "INSUFFICIENT_BALANCE"
+  | "INSUFFICIENT_STAKE"
+  | "INVALID_DESTINATION_ADDRESS"
+  | "DESTINATION_AMOUNT_TOO_LOW"
+  | "FEES_EXCEED_AMOUNT"
+  | "SLIPPAGE_EXCEEDED"
+  | "INSUFFICIENT_LIQUIDITY"
+  | "INVALID_SWAP"
+  | (string & {});
+
+/**
+ * A pre-flight check the order fails. Authoring still succeeds and returns it as a warning, but
+ * registering an order with a warning is rejected (422, `preflight-failed`), so do not ask the
+ * user to sign one.
+ */
+export interface PreflightWarning {
+  code: PreflightCode;
+  /** Smallest source amount that passes, in the source currency (on amount-too-low codes). */
+  minimumAmount?: string;
+  /** Largest source amount that stays within `limitPrice` (on `SLIPPAGE_EXCEEDED`). */
+  maximumAmount?: string;
 }
 
 export interface AuthoredOrder {
@@ -130,6 +167,8 @@ export interface AuthoredOrder {
   estimatedFees?: EstimatedFee[];
   /** What you receive after fees. Present for market orders; absent on older services. */
   quotes?: Quote[];
+  /** Failed pre-flight checks. Empty when the order passes; registering it with any is rejected. */
+  warnings: PreflightWarning[];
 }
 
 // ---- register / read -------------------------------------------------------
@@ -187,8 +226,8 @@ export interface Order {
   id: string;
   type: MarketOrderType;
   status: OrderStatus;
-  source: { currency: string; amount?: string; address?: string; limitPrice?: string };
-  destination: { currency: string; amount?: string; address?: string; limitPrice?: string };
+  source: { currency: string; amount?: string; address?: string; limitPrice?: number };
+  destination: { currency: string; amount?: string; address?: string; limitPrice?: number };
   signerAddress: string;
   sourceSystem?: string;
   events?: OrderEvent[];
@@ -248,10 +287,13 @@ export interface SubmitAuthoredOptions {
 
 // ---- high level ------------------------------------------------------------
 
-export interface PlaceMarketOrderRequest extends AuthorOrderRequest {
+export type PlaceMarketOrderRequest = AuthorOrderRequest & PlaceMarketOrderOptions;
+
+export interface PlaceMarketOrderOptions {
   signer: InstructionSigner;
   /**
-   * Called with the authored order (instruction and `estimatedFees`) before anything is signed.
+   * Called with the authored order (instruction and `estimatedFees`) before anything is signed,
+   * once it has passed the pre-flight checks (an order with `warnings` throws `PreflightError`).
    * Throw to abort: nothing has been signed, registered or submitted yet. Use it to show fees
    * or to refuse a swap that fees would eat (a stake below the chain's minimum fails on chain
    * and still costs the network fee).

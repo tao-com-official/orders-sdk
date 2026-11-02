@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ACCESS_TOKEN_TYPE, AuthenticationError, exchangeToken, TOKEN_EXCHANGE_GRANT } from "../src/index.js";
+import { ACCESS_TOKEN_TYPE, AuthenticationError, DEFAULT_AUTH_BASE_URL, exchangeToken, TOKEN_EXCHANGE_GRANT } from "../src/index.js";
 
 const BASE = "https://auth.test";
 
@@ -37,6 +37,15 @@ describe("exchangeToken", () => {
       bot_id: "279058397",
     });
     expect(String(calls[0]?.init.body)).not.toContain("%2526"); // no double encoding of '&'
+  });
+
+  it("defaults to the production auth service when no authBaseUrl is given", async () => {
+    const { fetch, calls } = fakeFetch(
+      ok({ access_token: "delegate.jwt", issued_token_type: ACCESS_TOKEN_TYPE, token_type: "Bearer", expires_in: 1800 }),
+    );
+    const { authBaseUrl: _, ...rest } = base;
+    await exchangeToken({ ...rest, fetch });
+    expect(calls[0]?.url).toBe(`${DEFAULT_AUTH_BASE_URL}/auth/tokens`);
   });
 
   it("uses the constants the service expects", () => {

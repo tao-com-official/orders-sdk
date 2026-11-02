@@ -1,7 +1,19 @@
 import { OrderServiceError, OrderServiceNetworkError, type Problem } from "./errors.js";
 
 export type FetchLike = typeof fetch;
+
+/** The production tao.com order service, used when `baseUrl` is not given. */
+export const DEFAULT_BASE_URL = "https://api.tao.com";
+/** The production tao.com authentication service, used when `authBaseUrl` is not given. */
+export const DEFAULT_AUTH_BASE_URL = "https://api.tao.com";
 export type AuthSource = string | (() => string | Promise<string>);
+
+/** Drops trailing slashes. A loop, not `/\/+$/`, which is quadratic on a long run of slashes. */
+export function trimTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) === 47 /* "/" */) end--;
+  return url.slice(0, end);
+}
 
 export interface HttpOptions {
   baseUrl: string;
@@ -39,7 +51,7 @@ export class Http {
   constructor(private readonly options: HttpOptions) {}
 
   async request<T>(input: RequestInput): Promise<HttpResponse<T>> {
-    const url = new URL(this.options.baseUrl.replace(/\/+$/, "") + input.path);
+    const url = new URL(trimTrailingSlashes(this.options.baseUrl) + input.path);
     for (const [key, value] of Object.entries(input.query ?? {})) {
       if (value !== undefined) url.searchParams.set(key, String(value));
     }

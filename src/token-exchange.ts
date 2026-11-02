@@ -1,12 +1,15 @@
 import { AuthenticationError } from "./errors.js";
-import type { FetchLike } from "./http.js";
+import { DEFAULT_AUTH_BASE_URL, trimTrailingSlashes, type FetchLike } from "./http.js";
 
 export const TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange";
 export const ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token";
 
 export interface TokenExchangeOptions {
-  /** Origin of the tao.com authentication service. The exchange is `POST {authBaseUrl}/auth/tokens`. */
-  authBaseUrl: string;
+  /**
+   * Origin of the tao.com authentication service. The exchange is `POST {authBaseUrl}/auth/tokens`.
+   * Default `https://api.tao.com` (production).
+   */
+  authBaseUrl?: string;
   /** The wallet-ownership access token, e.g. from `createWalletAuth(...).getToken()`. */
   subjectToken: string;
   /**
@@ -62,7 +65,7 @@ export async function exchangeToken(options: TokenExchangeOptions): Promise<Dele
 
   let response: Response;
   try {
-    response = await doFetch(`${options.authBaseUrl.replace(/\/+$/, "")}/auth/tokens`, {
+    response = await doFetch(`${trimTrailingSlashes(options.authBaseUrl ?? DEFAULT_AUTH_BASE_URL)}/auth/tokens`, {
       method: "POST",
       // A string body with an explicit type, as the service accepts only form data (optionally utf-8).
       headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
