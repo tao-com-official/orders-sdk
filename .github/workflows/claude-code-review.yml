@@ -64,8 +64,9 @@ jobs:
 
     steps:
       - name: Checkout the PR
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # A dispatch diffs against the base branch's merge-base, so it needs the history. A PR diffs its merge ref
           # against the ref's first parent, the base branch, so it needs one parent. (Quoted: a bare 0 is falsy here.)
           fetch-depth: ${{ github.event_name == 'workflow_dispatch' && '0' || '2' }}
@@ -73,8 +74,9 @@ jobs:
       # The review standards come from the base branch, so a PR cannot weaken the rules it is reviewed against. The
       # branch, not the event's base.sha, so they match the base the merge ref was built on.
       - name: Checkout review standards from the base branch
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           ref: ${{ github.event.pull_request.base.ref || inputs.base_ref || github.event.repository.default_branch }}
           path: .review-base
           fetch-depth: 1
@@ -108,7 +110,7 @@ jobs:
 
             # This review's last report on the PR, so a re-review keeps its finding IDs. Only the workflow's own
             # reviews count, so nobody can plant a "previous review".
-            gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
+            gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/${{ github.event.pull_request.number }}/reviews" \
               | jq -rs --arg marker "$MARKER" \
                 '[add[] | select(.user.login == "github-actions[bot]" and (.body // "" | contains($marker)))] | last | .body // ""' \
               > previous-review.md
@@ -148,7 +150,7 @@ jobs:
         id: claude-review
         timeout-minutes: 30
         continue-on-error: true
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@4fa93a88de49bbef68b10eb15aabedf28ca0e1ed # v1.0.271
         with:
           # Organization-level secret shared by the tao-com-official repositories.
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -229,14 +231,14 @@ jobs:
             '{commit_id: $commit_id, event: "COMMENT", body: $body, comments: $comments[0]}' \
             > review.json
           set +e
-          gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
+          gh api repos/$GITHUB_REPOSITORY/pulls/${{ github.event.pull_request.number }}/reviews \
             --method POST --input review.json
           status=$?
           set -e
           if [ $status -ne 0 ]; then
             echo "Review submit failed (likely unresolved diff lines). Retrying without inline comments."
             jq '{commit_id, event, body}' review.json > review-fallback.json
-            gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
+            gh api repos/$GITHUB_REPOSITORY/pulls/${{ github.event.pull_request.number }}/reviews \
               --method POST --input review-fallback.json
           fi
         env:
@@ -262,7 +264,7 @@ jobs:
 
       - name: Upload the dispatch report
         if: github.event_name == 'workflow_dispatch' && (success() || failure())
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: claude-review-${{ env.REVIEW_ID }}
           path: report.md
