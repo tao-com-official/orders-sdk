@@ -17,12 +17,12 @@ run-name: >-
   ${{ github.event_name == 'workflow_dispatch' && format('Claude Code Review (dispatch) {0}', github.ref_name)
   || github.event.pull_request.title || github.workflow }}
 
+# Dispatch only. PRs get the shared AI review (ai-review.yml: `claude-review / review` and
+# `security-review / review`), so a PR has one AI review. This file stays for the dispatch contract
+# above, which agents use before a PR exists and the shared workflow doesn't offer yet. Its
+# pull_request and issue_comment branches no longer fire; delete this file once the shared workflow
+# has a dispatch mode.
 on:
-  pull_request:
-    types: [opened, reopened, ready_for_review, synchronize]
-  # No `@claude review this` comment trigger (tao.com-api has one): issue_comment runs with secrets on the PR's code,
-  # including a fork's, and that code can change between the comment and the checkout (CodeQL
-  # actions/untrusted-checkout, actions/untrusted-checkout-toctou). To review again, re-run the job.
   workflow_dispatch:
     inputs:
       base_ref:
