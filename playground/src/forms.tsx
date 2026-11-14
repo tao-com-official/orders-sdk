@@ -174,7 +174,7 @@ function Authored({ authored }: { authored: AuthoredOrder }) {
 
 export function MarketForm({ session, onPlaced }: { session: Session; onPlaced: () => void }) {
   const [source, setSource] = useState<Leg>({ kind: "tao", netuid: "", hotkey: "" });
-  const [destination, setDestination] = useState<Leg>({ kind: "alpha", netuid: "1", hotkey: "" });
+  const [destination, setDestination] = useState<Leg>({ kind: "alpha", netuid: "10", hotkey: "" });
   const [side, setSide] = useState<"spend" | "receive">("spend");
   const [amount, setAmount] = useState("0.1");
   const [slippage, setSlippage] = useState("2");
@@ -251,7 +251,7 @@ type Product = (typeof PRODUCTS)[number]["id"];
 
 export function LimitForm({ session, onPlaced }: { session: Session; onPlaced: () => void }) {
   const [product, setProduct] = useState<Product>("LIMIT_BUY");
-  const [netuid, setNetuid] = useState("1");
+  const [netuid, setNetuid] = useState("10");
   const [hotkey, setHotkey] = useState("");
   const [amount, setAmount] = useState("0.1");
   const [trigger, setTrigger] = useState("");

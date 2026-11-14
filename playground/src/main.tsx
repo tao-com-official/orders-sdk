@@ -77,6 +77,9 @@ function loggedFetch(push: (entry: LogEntry) => void): typeof fetch {
 
 // ---- wallet ----------------------------------------------------------------
 
+// Testnet validator on netuid 10 the order-execution e2e suite stakes to (LIMIT_HOTKEY).
+const E2E_HOTKEY = "5CMHJBjpSCQv5r6V5cDKe8wLoJ8SGdkj9bPtw5gsPE5ENzL1";
+
 function Connect({ onSession }: { onSession: (session: Session) => void }) {
   const [network, setNetwork] = useState<Network>(saved("network", "testnet") as Network);
   const [method, setMethod] = useState(saved("method", "extension"));
@@ -84,7 +87,7 @@ function Connect({ onSession }: { onSession: (session: Session) => void }) {
   const [extension, setExtension] = useState(saved("extension", ""));
   const [accounts, setAccounts] = useState<Awaited<ReturnType<typeof extensionAccounts>>>();
   const [account, setAccount] = useState("");
-  const [hotkey, setHotkey] = useState(saved("hotkey", ""));
+  const [hotkey, setHotkey] = useState(saved("hotkey", E2E_HOTKEY));
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const extensions = installedExtensions();
