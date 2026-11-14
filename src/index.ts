@@ -9,7 +9,7 @@ export type { DelegateToken, TokenExchangeOptions } from "./token-exchange.js";
 export type { Problem } from "./errors.js";
 export { DEFAULT_AUTH_BASE_URL, DEFAULT_BASE_URL } from "./http.js";
 export type { AuthSource, FetchLike } from "./http.js";
-export { MARKET_ORDER_TYPES } from "./types.js";
+export { MARKET_ORDER_TYPES, TERMINAL_ORDER_STATUSES } from "./types.js";
 export { feesInCurrency, feesUsd, netAfterFees } from "./fees.js";
 export { RAO, ROOT_PRICE, spotPrice } from "./slippage.js";
 export type * from "./types.js";
