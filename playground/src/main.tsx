@@ -87,7 +87,7 @@ function Connect({ onSession }: { onSession: (session: Session) => void }) {
   const [extension, setExtension] = useState(saved("extension", ""));
   const [accounts, setAccounts] = useState<Awaited<ReturnType<typeof extensionAccounts>>>();
   const [account, setAccount] = useState("");
-  const [hotkey, setHotkey] = useState(saved("hotkey", E2E_HOTKEY));
+  const [hotkey, setHotkey] = useState(saved("hotkey", "") || E2E_HOTKEY);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const extensions = installedExtensions();
@@ -105,6 +105,11 @@ function Connect({ onSession }: { onSession: (session: Session) => void }) {
       setError(errorText(e));
     }
   };
+
+  // Reopen the extension remembered from last time, so its accounts are listed without re-picking it.
+  useEffect(() => {
+    if (method === "extension" && extension !== "" && extensions.includes(extension)) void loadAccounts(extension);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const connect = async () => {
     setBusy(true);
@@ -192,7 +197,10 @@ function Connect({ onSession }: { onSession: (session: Session) => void }) {
               ))}
             </select>
           </label>
-          {accounts !== undefined && (
+          {accounts !== undefined && accounts.accounts.length === 0 && (
+            <p className="muted">{extension} shared no accounts: allow this site in the extension and pick it again.</p>
+          )}
+          {accounts !== undefined && accounts.accounts.length > 0 && (
             <label className="field">
               <span>Account</span>
               <select value={account} onChange={(e) => setAccount(e.target.value)}>
