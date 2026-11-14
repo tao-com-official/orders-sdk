@@ -3,7 +3,17 @@ import { DEFAULT_BASE_URL, Http, type AuthSource, type FetchLike } from "./http.
 import type {
   Amount,
   AuthoredOrder,
+  AuthoredQuote,
+  AuthorLimitOrderRequest,
   AuthorOrderRequest,
+  LimitInput,
+  ListTransactionsParams,
+  NextSignature,
+  OrderLimit,
+  PlaceLimitOrderRequest,
+  SignedInstruction,
+  Transaction,
+  TransactionPage,
   EstimatedFee,
   Instruction,
   ListOrdersParams,
@@ -82,6 +92,94 @@ function registerPath(href: string | undefined): string {
   return url.pathname;
 }
 
+/** Wire dates are ISO-8601 strings. */
+function wireDate(value: string | Date): string {
+  return typeof value === "string" ? value : value.toISOString();
+}
+
+function exitLegs(limit: { stopLoss?: { percentage: number }; takeProfit?: { percentage: number } }) {
+  return {
+    ...(limit.stopLoss !== undefined ? { stopLoss: { percentage: limit.stopLoss.percentage } } : {}),
+    ...(limit.takeProfit !== undefined ? { takeProfit: { percentage: limit.takeProfit.percentage } } : {}),
+  };
+}
+
+function wireLimit(limit: LimitInput): Record<string, unknown> {
+  if (limit.type === "PROFIT_LOCK") return { type: limit.type, ...exitLegs(limit) };
+  if (limit.type === "MARKET_BUY") {
+    return { type: limit.type, maxSlippage: wireSlippage(limit.maxSlippage, "limit.maxSlippage"), ...exitLegs(limit) };
+  }
+  return {
+    type: limit.type,
+    ...(limit.triggerPrice !== undefined
+      ? {
+          triggerPrice: {
+            value: wireAmount(limit.triggerPrice.value, "limit.triggerPrice.value"),
+            currency: limit.triggerPrice.currency,
+          },
+        }
+      : {}),
+    limitPrice: {
+      value: wireAmount(limit.limitPrice.value, "limit.limitPrice.value"),
+      ...(limit.limitPrice.currency !== undefined ? { currency: limit.limitPrice.currency } : {}),
+    },
+    maxSlippage: wireSlippage(limit.maxSlippage, "limit.maxSlippage"),
+    ...(limit.expiresAt !== undefined ? { expiresAt: wireDate(limit.expiresAt) } : {}),
+    ...(limit.notBefore !== undefined ? { notBefore: wireDate(limit.notBefore) } : {}),
+    ...exitLegs(limit),
+  };
+}
+
+/**
+ * The register body repeats the order, but its `limit` takes only what a client can choose: the
+ * authored one also shows what the service derived (exit `targetPrice`, a plan's fixed slippage
+ * and expiry), which register rejects. A Profit Lock is sized by the service, so it takes no
+ * `source.amount`.
+ */
+function registerEnvelope(order: OrderEnvelope): OrderEnvelope {
+  const limit = order.limit;
+  if (limit === undefined) return order;
+  if (limit.type === "PROFIT_LOCK") {
+    const { amount: _sized, ...source } = order.source;
+    return { ...order, source: source as OrderEnvelope["source"], limit: { type: limit.type, ...exitLegs(limit) } };
+  }
+  if (limit.type === "MARKET_BUY") {
+    return {
+      ...order,
+      limit: {
+        type: limit.type,
+        ...(limit.maxSlippage !== undefined ? { maxSlippage: limit.maxSlippage } : {}),
+        ...exitLegs(limit),
+      },
+    };
+  }
+  const resolved: OrderLimit = {
+    type: limit.type,
+    ...(limit.triggerPrice !== undefined ? { triggerPrice: limit.triggerPrice } : {}),
+    ...(limit.limitPrice !== undefined ? { limitPrice: limit.limitPrice } : {}),
+    ...(limit.maxSlippage !== undefined ? { maxSlippage: limit.maxSlippage } : {}),
+    ...(limit.expiresAt !== undefined ? { expiresAt: limit.expiresAt } : {}),
+    ...(limit.notBefore !== undefined ? { notBefore: limit.notBefore } : {}),
+    ...exitLegs(limit),
+  };
+  return { ...order, limit: resolved };
+}
+
+type OrderBody = Omit<Order, "id" | "nextSignature"> & { instruction?: Instruction };
+
+/** A 202 is a plan with more to sign: its next instruction, link and token. */
+function orderFromResponse(response: { status: number; headers: Headers; body: OrderBody }): Order {
+  const { instruction, ...body } = response.body;
+  const order = withId(body);
+  const href = body._links.instruction?.href;
+  const provenanceToken = response.headers.get("x-provenance-token");
+  if (response.status !== 202) return order;
+  if (instruction === undefined || href === undefined || provenanceToken === null) {
+    throw new Error("order service answered 202 without the next instruction, link or X-Provenance-Token");
+  }
+  return { ...order, nextSignature: { instruction, href, provenanceToken } };
+}
+
 function lastSegment(href: string): string {
   return new URL(href, "http://localhost").pathname.split("/").filter(Boolean).pop() ?? "";
 }
@@ -113,9 +211,21 @@ export class OrderServiceClient {
    * With `destination.amount` (receive-side) the returned `order.source.amount` is the solved
    * amount the signed instruction spends.
    */
-  async authorOrder(input: AuthorOrderRequest): Promise<AuthoredOrder> {
+  async authorOrder(input: AuthorOrderRequest | AuthorLimitOrderRequest): Promise<AuthoredOrder> {
     const request = this.withHotkey(input);
-    if ((request.source.amount === undefined) === (request.destination.amount === undefined)) {
+    const limit = "limit" in request ? request.limit : undefined;
+    if (limit !== undefined) {
+      if (request.destination.amount !== undefined) {
+        throw new RangeError("A limit order takes no destination.amount");
+      }
+      if ((limit.type === "PROFIT_LOCK") !== (request.source.amount === undefined)) {
+        throw new RangeError(
+          limit.type === "PROFIT_LOCK"
+            ? "A PROFIT_LOCK takes no source.amount: the service sizes it"
+            : "A limit order needs source.amount",
+        );
+      }
+    } else if ((request.source.amount === undefined) === (request.destination.amount === undefined)) {
       throw new RangeError("Set exactly one of source.amount or destination.amount");
     }
     const { body, headers } = await this.http.request<{
@@ -123,7 +233,7 @@ export class OrderServiceClient {
       order: OrderEnvelope;
       instruction: Instruction;
       estimatedFees?: EstimatedFee[];
-      quotes?: Quote[];
+      quotes?: AuthoredQuote[];
       warnings?: PreflightWarning[];
     }>({
       method: "POST",
@@ -153,6 +263,7 @@ export class OrderServiceClient {
             : {}),
         },
         signerAddress: request.signerAddress,
+        ...(limit !== undefined ? { limit: wireLimit(limit) } : {}),
       },
     });
     const provenanceToken = headers.get("x-provenance-token");
@@ -184,8 +295,8 @@ export class OrderServiceClient {
   async getQuote(input: AuthorOrderRequest): Promise<Quote & { warnings: PreflightWarning[] }> {
     const { quotes, warnings } = await this.authorOrder(input);
     const quote = quotes?.[0];
-    if (quote === undefined) throw new Error("order service returned no quote for this order");
-    return { ...quote, warnings };
+    if (quote?.amount === undefined) throw new Error("order service returned no quote for this order");
+    return { amount: quote.amount, fees: quote.fees, warnings };
   }
 
   /**
@@ -194,7 +305,7 @@ export class OrderServiceClient {
    * code `preflight-failed` (422) and the failed checks in `problem.errors`.
    */
   async registerOrder(request: RegisterOrderRequest): Promise<Order> {
-    const { body } = await this.http.request<Omit<Order, "id">>({
+    const response = await this.http.request<OrderBody>({
       method: "POST",
       path: registerPath(request.href),
       authenticated: true,
@@ -204,28 +315,50 @@ export class OrderServiceClient {
       },
       body: {
         ...(request.sourceSystem !== undefined ? { sourceSystem: request.sourceSystem } : {}),
-        order: request.order,
+        order: registerEnvelope(request.order),
         signedInstruction: request.signedInstruction,
       },
     });
-    return withId(body);
+    return orderFromResponse(response);
+  }
+
+  /**
+   * Post the signature of a plan's next component (`order.nextSignature`). Returns the plan: with
+   * another `nextSignature` while more remain, `OPEN` after the last one. To resume a plan whose
+   * response was lost, `getOrder` it: a pending plan carries its `nextSignature`.
+   */
+  async submitComponent(next: NextSignature, signedInstruction: SignedInstruction): Promise<Order> {
+    const response = await this.http.request<OrderBody>({
+      method: "POST",
+      path: registerPath(next.href),
+      authenticated: true,
+      headers: { "x-provenance-token": next.provenanceToken },
+      body: { signedInstruction },
+    });
+    return orderFromResponse(response);
   }
 
   async getOrder(orderId: string): Promise<Order> {
-    const { body } = await this.http.request<Omit<Order, "id">>({
+    const response = await this.http.request<OrderBody>({
       method: "GET",
       path: `${BASE}/orders/${encodeURIComponent(orderId)}`,
       authenticated: true,
     });
-    return withId(body);
+    // A pending plan answers 200: its next step is there when it has an instruction link.
+    return orderFromResponse({
+      ...response,
+      status: response.body._links.instruction !== undefined ? 202 : response.status,
+    });
   }
 
-  /** Only allowed while `OPEN`; otherwise throws `OrderServiceError` with code `cancel-not-allowed`. */
+  /** Allowed while `OPEN` or `PENDING_SIGNATURES`; otherwise throws `OrderServiceError` with code `cancel-not-allowed`. */
   async cancelOrder(orderId: string): Promise<Order> {
     const { body } = await this.http.request<Omit<Order, "id">>({
       method: "POST",
       path: `${BASE}/orders/${encodeURIComponent(orderId)}/cancel`,
       authenticated: true,
+      // The service answers 415 to a POST with no content type, and 400 to an empty JSON body.
+      body: {},
     });
     return withId(body);
   }
@@ -257,19 +390,60 @@ export class OrderServiceClient {
   }
 
   /**
+   * The account's activity, newest first: its order-service orders and its other on-chain
+   * transactions (transfers, stakes made elsewhere). `account` must be the token's wallet.
+   * Rows appear once the chain history has them, so a just-placed order shows in `listOrders`
+   * first.
+   */
+  async listTransactions(account: string, params: ListTransactionsParams = {}): Promise<TransactionPage> {
+    const { body } = await this.http.request<{
+      _links: { next?: { href: string }; prev?: { href: string } };
+      _embedded?: { transactions?: Transaction[] };
+      page?: { total?: number };
+    }>({
+      method: "GET",
+      path: `${BASE}/bittensor/accounts/${encodeURIComponent(account)}/transactions`,
+      authenticated: true,
+      query: { netuid: params.netuid, type: params.type, limit: params.limit, cursor: params.cursor },
+    });
+    const nextCursor = cursorOf(body._links.next);
+    const prevCursor = cursorOf(body._links.prev);
+    return {
+      transactions: body._embedded?.transactions ?? [],
+      ...(body.page?.total !== undefined ? { total: body.page.total } : {}),
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+      ...(prevCursor !== undefined ? { prevCursor } : {}),
+    };
+  }
+
+  /**
    * Author, sign and register a market order in one call. Retrying with the same
    * `idempotencyKey` is safe only after a failure of the register step; a new author call
    * issues a new single-use provenance token.
    */
-  async placeMarketOrder(request: PlaceMarketOrderRequest): Promise<Order> {
-    const { signer, idempotencyKey, sourceSystem, beforeSign, ...authorRequest } = request;
-    const authored = await this.authorOrder(authorRequest);
+  placeMarketOrder(request: PlaceMarketOrderRequest): Promise<Order> {
+    return this.place(request);
+  }
+
+  /**
+   * Author, sign and register a limit order or plan in one call. A plan asks `signer` once per
+   * component (entry, stop loss, take profit) and opens after the last; `onComponentSigned`
+   * reports progress in between.
+   */
+  placeLimitOrder(request: PlaceLimitOrderRequest): Promise<Order> {
+    return this.place(request);
+  }
+
+  private async place(request: PlaceMarketOrderRequest | PlaceLimitOrderRequest): Promise<Order> {
+    const { signer, idempotencyKey, sourceSystem, beforeSign, onComponentSigned, ...authorRequest } = request;
+    const authored = await this.authorOrder(authorRequest as AuthorOrderRequest | AuthorLimitOrderRequest);
     assertPreflight(authored);
     await beforeSign?.(authored);
     return this.submitAuthored(authored, {
       signer,
       ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
       ...(sourceSystem !== undefined ? { sourceSystem } : {}),
+      ...(onComponentSigned !== undefined ? { onComponentSigned } : {}),
     });
   }
 
@@ -283,7 +457,7 @@ export class OrderServiceClient {
       signerAddress: authored.order.signerAddress,
       order: authored.order,
     });
-    return this.registerOrder({
+    let order = await this.registerOrder({
       ...(authored.instructionHref !== undefined ? { href: authored.instructionHref } : {}),
       order: authored.order,
       signedInstruction,
@@ -291,6 +465,17 @@ export class OrderServiceClient {
       idempotencyKey: options.idempotencyKey ?? crypto.randomUUID(),
       ...(options.sourceSystem !== undefined ? { sourceSystem: options.sourceSystem } : {}),
     });
+    // A plan: one signature per component until the service opens it.
+    for (let signed = 1; order.nextSignature !== undefined; signed++) {
+      options.onComponentSigned?.(order, signed);
+      const next: NextSignature = order.nextSignature;
+      const signature = await options.signer(next.instruction, {
+        signerAddress: authored.order.signerAddress,
+        order: authored.order,
+      });
+      order = await this.submitComponent(next, signature);
+    }
+    return order;
   }
 
   /** Stake TAO to Root (SN0). The network fee comes out of `amount`. */
@@ -318,7 +503,7 @@ export class OrderServiceClient {
    * swap), else the client default. Legs that already carry an address are left alone, so two
    * different hotkeys stay different (a move between validators).
    */
-  private withHotkey(request: AuthorOrderRequest): AuthorOrderRequest {
+  private withHotkey<T extends AuthorOrderRequest | AuthorLimitOrderRequest>(request: T): T {
     const isAlpha = (currency: string) => currency.includes(":alpha:");
     if (
       (!isAlpha(request.source.currency) || request.source.address !== undefined) &&
@@ -339,7 +524,7 @@ export class OrderServiceClient {
       destination: isAlpha(request.destination.currency)
         ? { ...request.destination, address: hotkey }
         : request.destination,
-    } as AuthorOrderRequest;
+    } as T;
   }
 
   private nativeUrn(): string {

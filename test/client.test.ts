@@ -245,7 +245,7 @@ describe("registerOrder", () => {
 });
 
 describe("getOrder / cancelOrder", () => {
-  it("gets an order and cancels without a body or content-type", async () => {
+  it("gets an order and cancels with an empty JSON object", async () => {
     const { fetch, calls } = fakeFetch(
       hal(200, orderResponse()),
       hal(200, orderResponse("CANCELLED", false)),
@@ -256,8 +256,8 @@ describe("getOrder / cancelOrder", () => {
     expect(cancelled.status).toBe("CANCELLED");
     expect(calls[1]?.url.pathname).toBe("/orders/v2/orders/ord_123/cancel");
     expect(calls[1]?.init.method).toBe("POST");
-    expect(calls[1]?.init.body).toBeUndefined();
-    expect(calls[1]?.headers.has("content-type")).toBe(false);
+    expect(calls[1]?.body).toEqual({});
+    expect(calls[1]?.headers.get("content-type")).toBe("application/json");
   });
 
   it("surfaces problem+json as OrderServiceError", async () => {
