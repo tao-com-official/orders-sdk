@@ -254,6 +254,7 @@ export function LimitForm({ session, onPlaced }: { session: Session; onPlaced: (
   const [netuid, setNetuid] = useState("10");
   const [hotkey, setHotkey] = useState("");
   const [amount, setAmount] = useState("0.1");
+  const [currency, setCurrency] = useState<"TAO" | "USD">("TAO");
   const [trigger, setTrigger] = useState("");
   const [limitPrice, setLimitPrice] = useState("");
   const [slippage, setSlippage] = useState("2");
@@ -266,23 +267,30 @@ export function LimitForm({ session, onPlaced }: { session: Session; onPlaced: (
   const buy = product === "LIMIT_BUY" || product === "MARKET_BUY";
   const priced = product === "LIMIT_BUY" || product === "TAKE_PROFIT" || product === "STOP_LOSS";
   const exits = product === "LIMIT_BUY" || product === "MARKET_BUY" || product === "PROFIT_LOCK";
+  const usd = currency === "USD";
 
   const limit = (): LimitInput => {
     const legs = {
       ...(pct(stopLoss) !== undefined ? { stopLoss: { percentage: pct(stopLoss)! } } : {}),
       ...(pct(takeProfit) !== undefined ? { takeProfit: { percentage: pct(takeProfit)! } } : {}),
     };
-    if (product === "PROFIT_LOCK") return { type: product, ...legs };
+    const inUsd = usd ? { currency: "USD" as const } : {};
+    if (product === "PROFIT_LOCK") return { type: product, ...inUsd, ...legs };
     const maxSlippage = pct(slippage) ?? 0;
-    if (product === "MARKET_BUY") return { type: product, maxSlippage, ...legs };
+    if (product === "MARKET_BUY") return { type: product, ...inUsd, maxSlippage, ...legs };
+    const common = {
+      type: product,
+      ...(expires !== "" ? { expiresAt: new Date(expires) } : {}),
+      ...(product === "LIMIT_BUY" ? legs : {}),
+    };
+    // A USD trigger fills at any price: the service takes no limit price or slippage for it.
+    if (usd) return { ...common, triggerPrice: { value: toRao(trigger), currency: "USD" } };
     const limitRao = toRao(limitPrice);
     return {
-      type: product,
+      ...common,
       limitPrice: { value: limitRao },
       triggerPrice: { value: trigger.trim() === "" ? limitRao : toRao(trigger), currency: `urn:bittensor:${session.network}:native` },
       maxSlippage,
-      ...(expires !== "" ? { expiresAt: new Date(expires) } : {}),
-      ...(product === "LIMIT_BUY" ? legs : {}),
     };
   };
 
@@ -337,18 +345,30 @@ export function LimitForm({ session, onPlaced }: { session: Session; onPlaced: (
         <Text label="Netuid" value={netuid} set={setNetuid} />
         <Text label="Hotkey" value={hotkey} set={setHotkey} placeholder="default from settings" />
         {product !== "PROFIT_LOCK" && <Text label={buy ? "Spend TAO" : "Sell alpha"} value={amount} set={setAmount} />}
+        <Field label={priced ? "Trigger on" : "Exits trigger on"}>
+          <select value={currency} onChange={(e) => setCurrency(e.target.value as "TAO" | "USD")}>
+            <option value="TAO">TAO price</option>
+            <option value="USD">USD price</option>
+          </select>
+        </Field>
       </div>
       {priced && (
         <div className="row">
-          <Text label="Trigger price (TAO per alpha)" value={trigger} set={setTrigger} placeholder="= limit price" />
-          <Text label="Limit price (TAO per alpha)" value={limitPrice} set={setLimitPrice} />
+          {usd ? (
+            <Text label="Trigger price (USD per alpha)" value={trigger} set={setTrigger} />
+          ) : (
+            <>
+              <Text label="Trigger price (TAO per alpha)" value={trigger} set={setTrigger} placeholder="= limit price" />
+              <Text label="Limit price (TAO per alpha)" value={limitPrice} set={setLimitPrice} />
+            </>
+          )}
           <Field label="Expires (optional)">
             <input type="datetime-local" value={expires} onChange={(e) => setExpires(e.target.value)} />
           </Field>
         </div>
       )}
       <div className="row">
-        {product !== "PROFIT_LOCK" && <Text label="Max slippage %" value={slippage} set={setSlippage} />}
+        {product !== "PROFIT_LOCK" && !(priced && usd) && <Text label="Max slippage %" value={slippage} set={setSlippage} />}
         {exits && <Text label="Stop loss %" value={stopLoss} set={setStopLoss} placeholder="none" />}
         {exits && <Text label="Take profit %" value={takeProfit} set={setTakeProfit} placeholder="none" />}
       </div>

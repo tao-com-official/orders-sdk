@@ -261,6 +261,8 @@ const order = await client.placeLimitOrder({
 | `MARKET_BUY` + `stopLoss` / `takeProfit` | Buys now, with the same exits. | `source.amount` (TAO) |
 | `PROFIT_LOCK` + `stopLoss` / `takeProfit` | Exits on a stake you already hold. The service sizes it. | none |
 
+USD triggers: give `triggerPrice: { value, currency: "USD" }` (USD per alpha × 1e9) and leave out `limitPrice` and `maxSlippage`; the service fills at any price. On `MARKET_BUY` / `PROFIT_LOCK`, `currency: "USD"` makes the exits fire on the USD price. The environment must enable `USD_TRIGGER`.
+
 `stopLoss` and `takeProfit` are `{ percentage }`, a fraction (`0.1` is 10%) off the entry price. Which types an environment accepts is server config: a disabled one answers 422. A limit instruction is `RAW`: sign the bytes, or `<Bytes>` + `blake2_256(bytes)` + `</Bytes>` (what a browser extension's `signRaw` produces over the hash).
 
 **Plans sign one component at a time.** Registering the first signature answers `PENDING_SIGNATURES` with the next instruction in `order.nextSignature`; `submitAuthored` and `placeLimitOrder` call your `signer` again for each component until the plan is `OPEN`. `onComponentSigned(order, signed)` reports progress. Unsigned plans expire after a few minutes. To finish one by hand, `getOrder` it and pass its `nextSignature` with the signature to `submitComponent`.

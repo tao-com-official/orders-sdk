@@ -69,26 +69,34 @@ export interface PriceInput {
  * - `MARKET_BUY`: buy now, with `stopLoss` / `takeProfit` exits on what it buys.
  * - `PROFIT_LOCK`: exits on a stake you already hold. No amount: the service sizes it.
  *
+ * `currency: "USD"` on `MARKET_BUY` / `PROFIT_LOCK` makes the exit legs fire on the USD price.
+ *
  * Which types an environment accepts is server config (`LIMIT_ORDER_ENABLED_TYPES`): a disabled
  * one answers 422.
  */
 export type LimitInput =
   | {
       type: LimitOrderType;
-      /** Default: `limitPrice`. */
+      /**
+       * Default: `limitPrice`. `currency: "USD"` fires on the alpha's USD price (USD per alpha
+       * × 1e9) and takes no `limitPrice` / `maxSlippage`: the service fills at any price.
+       */
       triggerPrice?: PriceInput;
-      /** `currency` defaults to the source (buy) or destination (sell) native currency. */
-      limitPrice: { value: Amount; currency?: string };
-      /** Fraction from 0 to 1. */
-      maxSlippage: number;
+      /**
+       * Required on a TAO trigger, absent on a USD one. `currency` defaults to the source (buy) or
+       * destination (sell) native currency.
+       */
+      limitPrice?: { value: Amount; currency?: string };
+      /** Fraction from 0 to 1. Required on a TAO trigger, absent on a USD one. */
+      maxSlippage?: number;
       /** Default set by the service. */
       expiresAt?: string | Date;
       notBefore?: string | Date;
       stopLoss?: ExitLeg;
       takeProfit?: ExitLeg;
     }
-  | { type: "MARKET_BUY"; maxSlippage: number; stopLoss?: ExitLeg; takeProfit?: ExitLeg }
-  | { type: "PROFIT_LOCK"; stopLoss?: ExitLeg; takeProfit?: ExitLeg };
+  | { type: "MARKET_BUY"; maxSlippage: number; currency?: "USD"; stopLoss?: ExitLeg; takeProfit?: ExitLeg }
+  | { type: "PROFIT_LOCK"; currency?: "USD"; stopLoss?: ExitLeg; takeProfit?: ExitLeg };
 
 /** An exit leg as the service shows it: the percentage and the price it derives to. */
 export interface ExitLegView extends ExitLeg {

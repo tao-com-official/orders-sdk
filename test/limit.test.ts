@@ -140,6 +140,7 @@ describe("limit plans", () => {
             signerAddress: SIGNER,
             limit: {
               type: "PROFIT_LOCK",
+              currency: "USD",
               maxSlippage: 0.02,
               expiresAt: "2027-01-01T00:00:00.000Z",
               stopLoss: { percentage: 0.05, targetPrice: { currency: NATIVE, value: "1" } },
@@ -157,17 +158,36 @@ describe("limit plans", () => {
       signerAddress: SIGNER,
       source: { currency: ALPHA, address: HOTKEY },
       destination: { currency: NATIVE },
-      limit: { type: "PROFIT_LOCK", stopLoss: { percentage: 0.05 } },
+      limit: { type: "PROFIT_LOCK", currency: "USD", stopLoss: { percentage: 0.05 } },
       signer: () => ({ type: "sr25519", value: "0x01" }),
     });
 
-    expect(calls[0]?.body).toMatchObject({ limit: { type: "PROFIT_LOCK", stopLoss: { percentage: 0.05 } } });
+    expect(calls[0]?.body).toMatchObject({
+      limit: { type: "PROFIT_LOCK", currency: "USD", stopLoss: { percentage: 0.05 } },
+    });
     expect((calls[1]?.body as { order: unknown }).order).toEqual({
       type: "alpha_to_tao",
       source: { currency: ALPHA, address: HOTKEY },
       destination: { currency: NATIVE },
       signerAddress: SIGNER,
-      limit: { type: "PROFIT_LOCK", stopLoss: { percentage: 0.05 } },
+      limit: { type: "PROFIT_LOCK", currency: "USD", stopLoss: { percentage: 0.05 } },
+    });
+  });
+
+  it("sends a USD trigger without limitPrice and maxSlippage", async () => {
+    const { fetch, calls } = fakeFetch(hal(200, { order: {}, instruction: raw("0x01") }, { "x-provenance-token": "t" }));
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+
+    await client.authorOrder({
+      signerAddress: SIGNER,
+      source: { currency: NATIVE, amount: 1000n },
+      destination: { currency: ALPHA, address: HOTKEY },
+      limit: { type: "LIMIT_BUY", triggerPrice: { value: 1_250_000_000n, currency: "USD" } },
+    });
+
+    expect((calls[0]?.body as { limit: unknown }).limit).toEqual({
+      type: "LIMIT_BUY",
+      triggerPrice: { value: "1250000000", currency: "USD" },
     });
   });
 

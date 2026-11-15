@@ -104,10 +104,17 @@ function exitLegs(limit: { stopLoss?: { percentage: number }; takeProfit?: { per
   };
 }
 
+const usd = (limit: { currency?: string }) => (limit.currency !== undefined ? { currency: limit.currency } : {});
+
 function wireLimit(limit: LimitInput): Record<string, unknown> {
-  if (limit.type === "PROFIT_LOCK") return { type: limit.type, ...exitLegs(limit) };
+  if (limit.type === "PROFIT_LOCK") return { type: limit.type, ...usd(limit), ...exitLegs(limit) };
   if (limit.type === "MARKET_BUY") {
-    return { type: limit.type, maxSlippage: wireSlippage(limit.maxSlippage, "limit.maxSlippage"), ...exitLegs(limit) };
+    return {
+      type: limit.type,
+      ...usd(limit),
+      maxSlippage: wireSlippage(limit.maxSlippage, "limit.maxSlippage"),
+      ...exitLegs(limit),
+    };
   }
   return {
     type: limit.type,
@@ -119,11 +126,15 @@ function wireLimit(limit: LimitInput): Record<string, unknown> {
           },
         }
       : {}),
-    limitPrice: {
-      value: wireAmount(limit.limitPrice.value, "limit.limitPrice.value"),
-      ...(limit.limitPrice.currency !== undefined ? { currency: limit.limitPrice.currency } : {}),
-    },
-    maxSlippage: wireSlippage(limit.maxSlippage, "limit.maxSlippage"),
+    ...(limit.limitPrice !== undefined
+      ? {
+          limitPrice: {
+            value: wireAmount(limit.limitPrice.value, "limit.limitPrice.value"),
+            ...(limit.limitPrice.currency !== undefined ? { currency: limit.limitPrice.currency } : {}),
+          },
+        }
+      : {}),
+    ...(limit.maxSlippage !== undefined ? { maxSlippage: wireSlippage(limit.maxSlippage, "limit.maxSlippage") } : {}),
     ...(limit.expiresAt !== undefined ? { expiresAt: wireDate(limit.expiresAt) } : {}),
     ...(limit.notBefore !== undefined ? { notBefore: wireDate(limit.notBefore) } : {}),
     ...exitLegs(limit),
@@ -141,13 +152,14 @@ function registerEnvelope(order: OrderEnvelope): OrderEnvelope {
   if (limit === undefined) return order;
   if (limit.type === "PROFIT_LOCK") {
     const { amount: _sized, ...source } = order.source;
-    return { ...order, source: source as OrderEnvelope["source"], limit: { type: limit.type, ...exitLegs(limit) } };
+    return { ...order, source: source as OrderEnvelope["source"], limit: { type: limit.type, ...usd(limit), ...exitLegs(limit) } };
   }
   if (limit.type === "MARKET_BUY") {
     return {
       ...order,
       limit: {
         type: limit.type,
+        ...usd(limit),
         ...(limit.maxSlippage !== undefined ? { maxSlippage: limit.maxSlippage } : {}),
         ...exitLegs(limit),
       },
