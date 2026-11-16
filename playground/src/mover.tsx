@@ -5,7 +5,7 @@ import type { Order, OrderComponent } from "@tao.com/orders-sdk";
 import { useCallback, useEffect, useState } from "react";
 
 import { addressOf, alphaPrice, movePrice, walletBalances } from "./chain";
-import { errorText, fromRao, save, saved, type Session } from "./forms";
+import { errorText, fromRao, save, saved, toRao, type Session } from "./forms";
 
 // The e2e suite's LIMIT_MOVER_HOTKEY: a testnet validator on netuid 10 other than the order hotkey.
 const MOVER_HOTKEY = "5GpM9BDQTbY1Mgxpm3hLApjpBpy1NSssXnbzDuEJSiSgYyni";
@@ -17,6 +17,7 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
   const [netuid, setNetuid] = useState(saved("mover.netuid", "10"));
   const [hotkey, setHotkey] = useState(saved("mover.hotkey", MOVER_HOTKEY));
   const [step, setStep] = useState(saved("mover.step", "1"));
+  const [target, setTarget] = useState("");
   const [spot, setSpot] = useState<bigint>();
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string>();
@@ -53,15 +54,20 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
 
   if (session.network !== "testnet") return null;
 
-  const move = async (sign: 1 | -1) => {
+  // `percent` of the spot, or (`"target"`) as far as it takes to reach the target price.
+  const move = async (by: number | "target") => {
     setBusy(true);
-    setStatus(`${sign > 0 ? "Staking" : "Unstaking"}, waiting for the block…`);
+    setStatus("Moving the pool, waiting for the block…");
     save("mover.seed", phrase.trim());
     save("mover.netuid", netuid);
     save("mover.hotkey", hotkey.trim());
     save("mover.step", step);
     try {
-      const { before, after } = await movePrice(session.rpc, phrase, hotkey.trim(), Number(netuid), sign * Number(step));
+      const percent =
+        by === "target"
+          ? (Number(toRao(target)) / Number(await alphaPrice(session.rpc, Number(netuid))) - 1) * 100
+          : by;
+      const { before, after } = await movePrice(session.rpc, phrase, hotkey.trim(), Number(netuid), percent);
       readSpot();
       const moved = ((Number(after) / Number(before) - 1) * 100).toFixed(2);
       setStatus(`${fromRao(String(before))} → ${fromRao(String(after))} TAO per alpha (${moved}%)`);
@@ -100,16 +106,25 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
         </label>
       </div>
       <div className="row">
-        <button disabled={busy || address === undefined} onClick={() => void move(1)}>
+        <button disabled={busy || address === undefined} onClick={() => void move(Number(step))}>
           ↑ {step}%
         </button>
-        <button disabled={busy || address === undefined} onClick={() => void move(-1)}>
+        <button disabled={busy || address === undefined} onClick={() => void move(-Number(step))}>
           ↓ {step}%
         </button>
         <span className="muted">
           Spot: {spot !== undefined ? `${fromRao(String(spot))} TAO per alpha` : "…"}{" "}
           <button onClick={readSpot}>↻</button>
         </span>
+      </div>
+      <div className="row">
+        <label className="field">
+          <span>Target price (TAO per alpha)</span>
+          <input value={target} onChange={(e) => setTarget(e.target.value)} placeholder={spot !== undefined ? fromRao(String(spot)) : ""} />
+        </label>
+        <button disabled={busy || address === undefined || target.trim() === ""} onClick={() => void move("target")}>
+          Move to price
+        </button>
       </div>
       {status !== undefined && <p className="muted">{status}</p>}
     </section>

@@ -89,7 +89,7 @@ export async function movePrice(
   netuid: number,
   percent: number,
 ): Promise<{ before: bigint; after: bigint }> {
-  if (!(percent !== 0 && Math.abs(percent) < 100)) throw new Error("Step must be a non-zero percent below 100");
+  if (!(Number.isFinite(percent) && percent !== 0 && percent > -100)) throw new Error("The move must be a non-zero percent above -100");
   await cryptoWaitReady();
   const pair = sr25519PairFromSeed(mnemonicToMiniSecret(phrase.trim().split(/\s+/).join(" ")));
   const p = await pool(rpc, netuid);
