@@ -66,3 +66,6 @@ tr { cursor: pointer; }
 details summary { cursor: pointer; padding: 2px 0; overflow-wrap: anywhere; }
 code { overflow-wrap: anywhere; }
 .stack { display: grid; gap: 16px; min-width: 0; }
+tr.leg td { background: var(--bg); }
+tr.leg td:first-child { padding-left: 28px; }
+.twisty { padding: 0 6px; margin-right: 6px; }

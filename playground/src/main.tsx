@@ -4,10 +4,11 @@ import {
   TERMINAL_ORDER_STATUSES,
   type Network,
   type Order,
+  type OrderComponent,
   type OrderSummary,
   type Transaction,
 } from "@tao.com/orders-sdk";
-import { StrictMode, useCallback, useEffect, useState } from "react";
+import { Fragment, StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { CrossChainForm, errorText, fromRao, Json, LimitForm, MarketForm, type Session } from "./forms";
@@ -228,6 +229,11 @@ const pushRef: { current: (e: LogEntry) => void } = { current: () => {} };
 
 // ---- history ---------------------------------------------------------------
 
+// A plan (Profit Lock, Market Buy, a Limit Buy with SL/TP) lists as one row; its legs are in getOrder.
+const isPlan = (o: OrderSummary) =>
+  o.limit !== undefined &&
+  (o.limit.type === "PROFIT_LOCK" || o.limit.type === "MARKET_BUY" || o.limit.stopLoss !== undefined || o.limit.takeProfit !== undefined);
+
 const short = (urn: string) => {
   const parts = urn.split(":");
   return parts[parts.length - 1] === "native" ? "TAO" : `α${parts[parts.length - 1]}`;
@@ -289,6 +295,34 @@ function History({ session, refresh }: { session: Session; refresh: number }) {
   const [detail, setDetail] = useState<Order>();
   const [error, setError] = useState<string>();
   const [loadedAt, setLoadedAt] = useState<string>();
+  // Expanded plans: their components, or the error reading them.
+  const [legs, setLegs] = useState<Record<string, OrderComponent[] | string>>({});
+  const legsRef = useRef(legs);
+  legsRef.current = legs;
+
+  const readLegs = useCallback(
+    async (id: string) => {
+      try {
+        const order = await session.client.getOrder(id);
+        setLegs((all) => (id in all ? { ...all, [id]: order._embedded?.components ?? [] } : all));
+      } catch (e) {
+        setLegs((all) => (id in all ? { ...all, [id]: errorText(e) } : all));
+      }
+    },
+    [session],
+  );
+  const toggle = (id: string) => {
+    if (id in legs) {
+      setLegs(({ [id]: _, ...rest }) => rest);
+    } else {
+      setLegs((all) => ({ ...all, [id]: [] }));
+      void readLegs(id);
+    }
+  };
+  // Each reload of the list (refresh, poll) rereads the expanded plans too.
+  useEffect(() => {
+    for (const id of Object.keys(legsRef.current)) void readLegs(id);
+  }, [orders, readLegs]);
 
   const load = useCallback(async () => {
     setError(undefined);
@@ -371,8 +405,21 @@ function History({ session, refresh }: { session: Session; refresh: number }) {
         <table>
           <tbody>
             {orders.map((o) => (
-              <tr key={o.id} onClick={() => void open(o.id)}>
+              <Fragment key={o.id}>
+              <tr onClick={() => void open(o.id)}>
                 <td>
+                  {isPlan(o) && (
+                    <button
+                      className="twisty"
+                      title="Show the plan's components"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggle(o.id);
+                      }}
+                    >
+                      {o.id in legs ? "▾" : "▸"}
+                    </button>
+                  )}
                   <span className={`status ${o.status}`}>{o.status}</span>
                 </td>
                 <td>
@@ -395,6 +442,33 @@ function History({ session, refresh }: { session: Session; refresh: number }) {
                   )}
                 </td>
               </tr>
+              {typeof legs[o.id] === "string" && (
+                <tr className="leg">
+                  <td colSpan={4} className="error">
+                    {legs[o.id] as string}
+                  </td>
+                </tr>
+              )}
+              {Array.isArray(legs[o.id]) &&
+                (legs[o.id] as OrderComponent[]).map((c, i) => (
+                  <tr key={i} className="leg" onClick={() => void open(o.id)}>
+                    <td>
+                      <span className={`status ${c.status}`}>{c.status}</span>
+                    </td>
+                    <td>
+                      {c.role} · {c.limit?.type ?? c.type}
+                      <div className="muted">
+                        {c.source.amount !== undefined ? `${fromRao(c.source.amount)} ` : ""}
+                        {short(c.source.currency)} → {short(c.destination.currency)}
+                        {c.limit?.triggerPrice !== undefined &&
+                          ` · trigger ${fromRao(c.limit.triggerPrice.value)} ${c.limit.triggerPrice.currency === "USD" ? "USD" : "TAO"}`}
+                      </div>
+                    </td>
+                    <td className="muted">{new Date(c.updatedAt).toLocaleString()}</td>
+                    <td />
+                  </tr>
+                ))}
+              </Fragment>
             ))}
             {orders.length === 0 && (
               <tr>
