@@ -405,7 +405,17 @@ export interface OrderPage {
  */
 export type InstructionSigner = (
   instruction: Instruction,
-  context: { signerAddress: string; order: OrderEnvelope },
+  context: {
+    signerAddress: string;
+    /** The order as authored: for a plan, its entry and the exit legs it asked for. */
+    order: OrderEnvelope;
+    /**
+     * Set when signing a plan's next component (an exit leg) after the entry: how many signatures
+     * the service has accepted, and the plan as it stands, with its components in
+     * `plan._embedded.components`.
+     */
+    component?: { signed: number; plan: Order };
+  },
 ) => Promise<SignedInstruction> | SignedInstruction;
 
 // ---- submit ----------------------------------------------------------------

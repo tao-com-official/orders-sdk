@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { OrderServiceClient, type InstructionSigner } from "../src/index.js";
+import { OrderServiceClient, UnexpectedResponseError, type InstructionSigner } from "../src/index.js";
 
 const BASE = "https://orders.test";
 const SIGNER = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
@@ -221,6 +221,162 @@ describe("limit plans", () => {
       href: `${BASE}/orders/v2/orders/p1/components`,
       provenanceToken: "t-tp",
     });
+  });
+});
+
+describe("limit wire shapes and plan guards", () => {
+  const authored = (limit: object, token = "t") =>
+    hal(
+      200,
+      {
+        _links: { instruction: { href: `${BASE}/orders/v2/orders` } },
+        order: {
+          type: "tao_to_alpha",
+          source: { currency: NATIVE, amount: "1000" },
+          destination: { currency: ALPHA, address: HOTKEY },
+          signerAddress: SIGNER,
+          ...(Object.keys(limit).length > 0 ? { limit } : {}),
+        },
+        instruction: raw("0xentry"),
+      },
+      { "x-provenance-token": token },
+    );
+  const buy = {
+    signerAddress: SIGNER,
+    source: { currency: NATIVE, amount: 1000n },
+    destination: { currency: ALPHA, address: HOTKEY },
+  };
+  const signer: InstructionSigner = () => ({ type: "sr25519", value: "0x01" });
+
+  it("sends a USD MARKET_BUY and registers only its own choices", async () => {
+    const { fetch, calls } = fakeFetch(
+      authored({
+        type: "MARKET_BUY",
+        currency: "USD",
+        maxSlippage: 0.02,
+        expiresAt: "2027-01-01T00:00:00.000Z",
+        stopLoss: { percentage: 0.1, targetPrice: { currency: "USD", value: "1" } },
+      }),
+      hal(201, plan("OPEN", {})),
+    );
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+
+    await client.placeLimitOrder({
+      ...buy,
+      limit: { type: "MARKET_BUY", currency: "USD", maxSlippage: 0.02, stopLoss: { percentage: 0.1 } },
+      signer,
+    });
+
+    expect((calls[0]?.body as { limit: unknown }).limit).toEqual({
+      type: "MARKET_BUY",
+      currency: "USD",
+      maxSlippage: 0.02,
+      stopLoss: { percentage: 0.1 },
+    });
+    // The plan's expiry and the derived targetPrice stay out of register.
+    expect((calls[1]?.body as { order: { limit: unknown } }).order.limit).toEqual({
+      type: "MARKET_BUY",
+      currency: "USD",
+      maxSlippage: 0.02,
+      stopLoss: { percentage: 0.1 },
+    });
+  });
+
+  it("sends an explicit TAO trigger with notBefore as ISO strings", async () => {
+    const { fetch, calls } = fakeFetch(authored({}));
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+
+    await client.authorOrder({
+      ...buy,
+      limit: {
+        type: "LIMIT_BUY",
+        triggerPrice: { value: 950n, currency: NATIVE },
+        limitPrice: { value: 900n },
+        maxSlippage: 0.01,
+        notBefore: new Date("2026-12-01T00:00:00Z"),
+      },
+    });
+
+    expect((calls[0]?.body as { limit: unknown }).limit).toEqual({
+      type: "LIMIT_BUY",
+      triggerPrice: { value: "950", currency: NATIVE },
+      limitPrice: { value: "900" },
+      maxSlippage: 0.01,
+      notBefore: "2026-12-01T00:00:00.000Z",
+    });
+  });
+
+  it("rejects destination.amount on a limit order", async () => {
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch: fakeFetch().fetch });
+    await expect(
+      client.authorOrder({
+        ...buy,
+        destination: { ...buy.destination, amount: 5n } as never,
+        limit: { type: "LIMIT_BUY", limitPrice: { value: 900n }, maxSlippage: 0.01 },
+      }),
+    ).rejects.toThrow("A limit order takes no destination.amount");
+  });
+
+  it("throws UnexpectedResponseError on a 202 without its X-Provenance-Token", async () => {
+    const { fetch } = fakeFetch(
+      authored({ type: "LIMIT_BUY", stopLoss: { percentage: 0.1 } }),
+      hal(202, plan("PENDING_SIGNATURES", next, { instruction: raw("0xsl") })),
+    );
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    await expect(
+      client.placeLimitOrder({
+        ...buy,
+        limit: { type: "LIMIT_BUY", limitPrice: { value: 900n }, maxSlippage: 0.01, stopLoss: { percentage: 0.1 } },
+        signer,
+      }),
+    ).rejects.toBeInstanceOf(UnexpectedResponseError);
+  });
+
+  it("refuses to sign a plan component that is not a RAW limit order", async () => {
+    const extrinsic = { type: "SUBSTRATE_EXTRINSIC", payload: { call: "balances.transfer_all" } };
+    const { fetch } = fakeFetch(
+      authored({ type: "LIMIT_BUY", stopLoss: { percentage: 0.1 } }),
+      hal(202, plan("PENDING_SIGNATURES", next, { instruction: extrinsic }), { "x-provenance-token": "t" }),
+    );
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    const sign = vi.fn(signer);
+    await expect(
+      client.placeLimitOrder({
+        ...buy,
+        limit: { type: "LIMIT_BUY", limitPrice: { value: 900n }, maxSlippage: 0.01, stopLoss: { percentage: 0.1 } },
+        signer: sign,
+      }),
+    ).rejects.toThrow("must be a RAW limit order");
+    expect(sign).toHaveBeenCalledTimes(1); // the entry only
+  });
+
+  it("refuses more signatures than the order has exit legs, and any on a market order", async () => {
+    const extra = () => hal(202, plan("PENDING_SIGNATURES", next, { instruction: raw("0xmore") }), { "x-provenance-token": "t" });
+    const { fetch } = fakeFetch(authored({}), extra());
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    const sign = vi.fn(signer);
+    await expect(client.placeMarketOrder({ ...buy, signer: sign })).rejects.toBeInstanceOf(UnexpectedResponseError);
+    expect(sign).toHaveBeenCalledTimes(1);
+
+    const second = fakeFetch(
+      authored({ type: "LIMIT_BUY", stopLoss: { percentage: 0.1 } }),
+      hal(202, plan("PENDING_SIGNATURES", next, { instruction: raw("0xsl") }), { "x-provenance-token": "t" }),
+      extra(),
+    );
+    const contexts: unknown[] = [];
+    const plans = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch: second.fetch });
+    await expect(
+      plans.placeLimitOrder({
+        ...buy,
+        limit: { type: "LIMIT_BUY", limitPrice: { value: 900n }, maxSlippage: 0.01, stopLoss: { percentage: 0.1 } },
+        signer: (instruction, context) => {
+          contexts.push(context.component?.signed);
+          return signer(instruction, context);
+        },
+      }),
+    ).rejects.toThrow("has 1 exit leg(s) to sign");
+    // Entry without a component, then the stop loss as component 1; the third ask is refused unsigned.
+    expect(contexts).toEqual([undefined, 1]);
   });
 });
 

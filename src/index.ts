@@ -1,7 +1,13 @@
 export { OrderServiceClient } from "./client.js";
 export type { Network, OrderServiceClientOptions } from "./client.js";
 export { TAO_COM_VALIDATOR_HOTKEYS } from "./hotkeys.js";
-export { AuthenticationError, OrderServiceError, OrderServiceNetworkError, PreflightError } from "./errors.js";
+export {
+  AuthenticationError,
+  OrderServiceError,
+  OrderServiceNetworkError,
+  PreflightError,
+  UnexpectedResponseError,
+} from "./errors.js";
 export { createWalletAuth } from "./auth.js";
 export type { ChallengeSigner, DelegateOptions, WalletAuth, WalletAuthOptions } from "./auth.js";
 export { ACCESS_TOKEN_TYPE, exchangeToken, TOKEN_EXCHANGE_GRANT } from "./token-exchange.js";

@@ -1,4 +1,4 @@
-import { PreflightError } from "./errors.js";
+import { PreflightError, UnexpectedResponseError } from "./errors.js";
 import { DEFAULT_BASE_URL, Http, type AuthSource, type FetchLike } from "./http.js";
 import type {
   Amount,
@@ -9,7 +9,6 @@ import type {
   LimitInput,
   ListTransactionsParams,
   NextSignature,
-  OrderLimit,
   PlaceLimitOrderRequest,
   SignedInstruction,
   Transaction,
@@ -150,31 +149,47 @@ function wireLimit(limit: LimitInput): Record<string, unknown> {
 function registerEnvelope(order: OrderEnvelope): OrderEnvelope {
   const limit = order.limit;
   if (limit === undefined) return order;
+  const legs = exitLegs(limit);
   if (limit.type === "PROFIT_LOCK") {
     const { amount: _sized, ...source } = order.source;
-    return { ...order, source: source as OrderEnvelope["source"], limit: { type: limit.type, ...usd(limit), ...exitLegs(limit) } };
+    return { ...order, source: source as OrderEnvelope["source"], limit: { type: limit.type, ...usd(limit), ...legs } };
   }
   if (limit.type === "MARKET_BUY") {
-    return {
-      ...order,
-      limit: {
-        type: limit.type,
-        ...usd(limit),
-        ...(limit.maxSlippage !== undefined ? { maxSlippage: limit.maxSlippage } : {}),
-        ...exitLegs(limit),
-      },
-    };
+    const { type, maxSlippage } = limit;
+    return { ...order, limit: { type, ...usd(limit), ...(maxSlippage !== undefined ? { maxSlippage } : {}), ...legs } };
   }
-  const resolved: OrderLimit = {
-    type: limit.type,
-    ...(limit.triggerPrice !== undefined ? { triggerPrice: limit.triggerPrice } : {}),
-    ...(limit.limitPrice !== undefined ? { limitPrice: limit.limitPrice } : {}),
-    ...(limit.maxSlippage !== undefined ? { maxSlippage: limit.maxSlippage } : {}),
-    ...(limit.expiresAt !== undefined ? { expiresAt: limit.expiresAt } : {}),
-    ...(limit.notBefore !== undefined ? { notBefore: limit.notBefore } : {}),
-    ...exitLegs(limit),
+  const { stopLoss: _sl, takeProfit: _tp, ...chosen } = limit;
+  return { ...order, limit: { ...chosen, ...legs } };
+}
+
+/** Exactly one amount on a market order; a limit order spends `source.amount`, except a Profit Lock. */
+function assertAmounts(request: AuthorOrderRequest | AuthorLimitOrderRequest, limit: LimitInput | undefined): void {
+  if (limit === undefined) {
+    if ((request.source.amount === undefined) === (request.destination.amount === undefined)) {
+      throw new RangeError("Set exactly one of source.amount or destination.amount");
+    }
+    return;
+  }
+  if (request.destination.amount !== undefined) throw new RangeError("A limit order takes no destination.amount");
+  if ((limit.type === "PROFIT_LOCK") !== (request.source.amount === undefined)) {
+    throw new RangeError(
+      limit.type === "PROFIT_LOCK"
+        ? "A PROFIT_LOCK takes no source.amount: the service sizes it"
+        : "A limit order needs source.amount",
+    );
+  }
+}
+
+function wireLeg(
+  leg: { currency: string; amount?: Amount; address?: string; limitPrice?: number },
+  name: "source" | "destination",
+) {
+  return {
+    currency: leg.currency,
+    ...(leg.amount !== undefined ? { amount: wireAmount(leg.amount, `${name}.amount`) } : {}),
+    ...(leg.address !== undefined ? { address: leg.address } : {}),
+    ...(leg.limitPrice !== undefined ? { limitPrice: wireSlippage(leg.limitPrice, `${name}.limitPrice`) } : {}),
   };
-  return { ...order, limit: resolved };
 }
 
 type OrderBody = Omit<Order, "id" | "nextSignature"> & { instruction?: Instruction };
@@ -187,7 +202,9 @@ function orderFromResponse(response: { status: number; headers: Headers; body: O
   const provenanceToken = response.headers.get("x-provenance-token");
   if (response.status !== 202) return order;
   if (instruction === undefined || href === undefined || provenanceToken === null) {
-    throw new Error("order service answered 202 without the next instruction, link or X-Provenance-Token");
+    throw new UnexpectedResponseError(
+      "order service answered 202 without the next instruction, link or X-Provenance-Token",
+    );
   }
   return { ...order, nextSignature: { instruction, href, provenanceToken } };
 }
@@ -226,20 +243,7 @@ export class OrderServiceClient {
   async authorOrder(input: AuthorOrderRequest | AuthorLimitOrderRequest): Promise<AuthoredOrder> {
     const request = this.withHotkey(input);
     const limit = "limit" in request ? request.limit : undefined;
-    if (limit !== undefined) {
-      if (request.destination.amount !== undefined) {
-        throw new RangeError("A limit order takes no destination.amount");
-      }
-      if ((limit.type === "PROFIT_LOCK") !== (request.source.amount === undefined)) {
-        throw new RangeError(
-          limit.type === "PROFIT_LOCK"
-            ? "A PROFIT_LOCK takes no source.amount: the service sizes it"
-            : "A limit order needs source.amount",
-        );
-      }
-    } else if ((request.source.amount === undefined) === (request.destination.amount === undefined)) {
-      throw new RangeError("Set exactly one of source.amount or destination.amount");
-    }
+    assertAmounts(request, limit);
     const { body, headers } = await this.http.request<{
       _links?: { instruction?: { href?: string } };
       order: OrderEnvelope;
@@ -252,35 +256,15 @@ export class OrderServiceClient {
       path: `${BASE}/order-intents`,
       authenticated: true,
       body: {
-        source: {
-          currency: request.source.currency,
-          ...(request.source.amount !== undefined
-            ? { amount: wireAmount(request.source.amount, "source.amount") }
-            : {}),
-          ...(request.source.address !== undefined ? { address: request.source.address } : {}),
-          ...(request.source.limitPrice !== undefined
-            ? { limitPrice: wireSlippage(request.source.limitPrice, "source.limitPrice") }
-            : {}),
-        },
-        destination: {
-          currency: request.destination.currency,
-          ...(request.destination.amount !== undefined
-            ? { amount: wireAmount(request.destination.amount, "destination.amount") }
-            : {}),
-          ...(request.destination.address !== undefined
-            ? { address: request.destination.address }
-            : {}),
-          ...(request.destination.limitPrice !== undefined
-            ? { limitPrice: wireSlippage(request.destination.limitPrice, "destination.limitPrice") }
-            : {}),
-        },
+        source: wireLeg(request.source, "source"),
+        destination: wireLeg(request.destination, "destination"),
         signerAddress: request.signerAddress,
         ...(limit !== undefined ? { limit: wireLimit(limit) } : {}),
       },
     });
     const provenanceToken = headers.get("x-provenance-token");
     if (provenanceToken === null) {
-      throw new Error("order service response is missing X-Provenance-Token");
+      throw new UnexpectedResponseError("order service response is missing X-Provenance-Token");
     }
     const instructionHref = body._links?.instruction?.href;
     return {
@@ -307,7 +291,7 @@ export class OrderServiceClient {
   async getQuote(input: AuthorOrderRequest): Promise<Quote & { warnings: PreflightWarning[] }> {
     const { quotes, warnings } = await this.authorOrder(input);
     const quote = quotes?.[0];
-    if (quote?.amount === undefined) throw new Error("order service returned no quote for this order");
+    if (quote?.amount === undefined) throw new UnexpectedResponseError("order service returned no quote for this order");
     return { amount: quote.amount, fees: quote.fees, warnings };
   }
 
@@ -477,13 +461,27 @@ export class OrderServiceClient {
       idempotencyKey: options.idempotencyKey ?? crypto.randomUUID(),
       ...(options.sourceSystem !== undefined ? { sourceSystem: options.sourceSystem } : {}),
     });
-    // A plan: one signature per component until the service opens it.
+    // A plan: one signature per exit leg the request asked for, each a RAW limit order, until the
+    // service opens it. Anything else the service asks to sign is refused, not signed.
+    const limit = authored.order.limit;
+    // A Profit Lock has no entry: its first leg was signed above.
+    const legs = (limit?.stopLoss !== undefined ? 1 : 0) + (limit?.takeProfit !== undefined ? 1 : 0);
+    const exits = limit?.type === "PROFIT_LOCK" ? legs - 1 : legs;
     for (let signed = 1; order.nextSignature !== undefined; signed++) {
-      options.onComponentSigned?.(order, signed);
       const next: NextSignature = order.nextSignature;
+      if (signed > exits) {
+        throw new UnexpectedResponseError(
+          `order service asked for signature ${signed + 1}, but this order has ${exits} exit leg(s) to sign`,
+        );
+      }
+      if (next.instruction.type !== "RAW") {
+        throw new UnexpectedResponseError(`a plan component must be a RAW limit order, not ${next.instruction.type}`);
+      }
+      options.onComponentSigned?.(order, signed);
       const signature = await options.signer(next.instruction, {
         signerAddress: authored.order.signerAddress,
         order: authored.order,
+        component: { signed, plan: order },
       });
       order = await this.submitComponent(next, signature);
     }

@@ -265,7 +265,7 @@ USD triggers: give `triggerPrice: { value, currency: "USD" }` (USD per alpha × 
 
 `stopLoss` and `takeProfit` are `{ percentage }`, a fraction (`0.1` is 10%) off the entry price. Which types an environment accepts is server config: a disabled one answers 422. A limit instruction is `RAW`: sign the bytes, or `<Bytes>` + `blake2_256(bytes)` + `</Bytes>` (what a browser extension's `signRaw` produces over the hash).
 
-**Plans sign one component at a time.** Registering the first signature answers `PENDING_SIGNATURES` with the next instruction in `order.nextSignature`; `submitAuthored` and `placeLimitOrder` call your `signer` again for each component until the plan is `OPEN`. `onComponentSigned(order, signed)` reports progress. Unsigned plans expire after a few minutes. To finish one by hand, `getOrder` it and pass its `nextSignature` with the signature to `submitComponent`.
+**Plans sign one component at a time.** Registering the first signature answers `PENDING_SIGNATURES` with the next instruction in `order.nextSignature`; `submitAuthored` and `placeLimitOrder` call your `signer` again for each component until the plan is `OPEN`. `onComponentSigned(order, signed)` reports progress, and the signer's `context.component` (`{ signed, plan }`) says which component it is signing. The SDK signs only what the request asked for: one `RAW` component per exit leg after the entry (a Profit Lock's first leg is its first signature). Anything else throws `UnexpectedResponseError` before signing. Unsigned plans expire after a few minutes. To finish one by hand, `getOrder` it and pass its `nextSignature` with the signature to `submitComponent`.
 
 The authored order shows what the service resolved: the default expiry and each exit's `targetPrice`. A limit quote carries `rate` and `priceImpact` instead of `amount`, so `getQuote` is for market orders only.
 
@@ -286,13 +286,14 @@ A row from this service links to its order (`_links.order`). Rows appear once th
 
 ## Errors
 
-Failures throw one of four classes:
+Failures throw one of five classes:
 
 | Class | When |
 | --- | --- |
 | `OrderServiceError` | The service answered with a problem (RFC 9457). Has `status`, `code`, `problem` (with `field` for a bad input) and `requestId`. |
 | `OrderServiceNetworkError` | No usable response: a network failure, a timeout, or an error that did not come from the service, such as the gateway rejecting a token. Has `status` when a response arrived. |
 | `PreflightError` | The authored order failed a pre-flight check, so the SDK did not ask for a signature. Has `warnings`. |
+| `UnexpectedResponseError` | The service answered 2xx with something the SDK cannot act on: a missing `X-Provenance-Token`, instruction or link, or a plan asking to sign more components than the order has exit legs, or a component that is not a `RAW` limit order. Nothing more is signed. |
 | `AuthenticationError` | Login, refresh or token exchange failed. `code` is `UNAUTHORIZED`, `HTTP_ERROR`, `NETWORK_ERROR` or `PROTOCOL`; `oauthError` carries the exchange's OAuth code. |
 
 `OrderServiceError.code` is the last segment of the problem type:
