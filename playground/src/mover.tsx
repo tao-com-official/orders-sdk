@@ -4,7 +4,7 @@
 import type { Order, OrderComponent } from "@tao.com/orders-sdk";
 import { useCallback, useEffect, useState } from "react";
 
-import { addressOf, alphaPrice, movePrice } from "./chain";
+import { addressOf, alphaPrice, movePrice, walletBalances } from "./chain";
 import { errorText, fromRao, save, saved, type Session } from "./forms";
 
 // The e2e suite's LIMIT_MOVER_HOTKEY: a testnet validator on netuid 10 other than the order hotkey.
@@ -27,10 +27,21 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
     addressOf(phrase).then(setAddress, (e) => setStatus(errorText(e)));
   }, [phrase]);
 
+  const [balance, setBalance] = useState<string>();
+
+  // Spot of the subnet and the mover's balance: free TAO, and its alpha on this hotkey and netuid.
   const readSpot = useCallback(() => {
     if (!/^\d+$/.test(netuid)) return;
     alphaPrice(session.rpc, Number(netuid)).then(setSpot, () => setSpot(undefined));
-  }, [netuid, session.rpc]);
+    if (address === undefined) return setBalance(undefined);
+    walletBalances(session.rpc, address).then(
+      ({ free, stakes }) => {
+        const alpha = stakes.find((s) => s.netuid === Number(netuid) && s.hotkey === hotkey.trim())?.stake ?? 0n;
+        setBalance(`${fromRao(String(free)) || "0"} TAO free · ${fromRao(String(alpha)) || "0"} α staked here`);
+      },
+      (e) => setBalance(errorText(e)),
+    );
+  }, [address, hotkey, netuid, session.rpc]);
   useEffect(readSpot, [readSpot]);
 
   if (session.network !== "testnet") return null;
@@ -44,7 +55,7 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
     save("mover.step", step);
     try {
       const { before, after } = await movePrice(session.rpc, phrase, hotkey.trim(), Number(netuid), sign * Number(step));
-      setSpot(after);
+      readSpot();
       const moved = ((Number(after) / Number(before) - 1) * 100).toFixed(2);
       setStatus(`${fromRao(String(before))} → ${fromRao(String(after))} TAO per alpha (${moved}%)`);
       onMoved();
@@ -66,6 +77,7 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
         <span>Mover mnemonic {address !== undefined && <code>{address}</code>}</span>
         <input type="password" value={phrase} onChange={(e) => setPhrase(e.target.value)} autoComplete="off" />
       </label>
+      {balance !== undefined && <p className="muted">Mover balance: {balance}</p>}
       <div className="row">
         <label className="field">
           <span>Netuid</span>
