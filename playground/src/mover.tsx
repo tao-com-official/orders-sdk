@@ -89,7 +89,7 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
       </p>
       <label className="field">
         <span>Mover mnemonic {address !== undefined && <code>{address}</code>}</span>
-        <div className="row">
+        <div className="row inline">
           <input
             type={shown ? "text" : "password"}
             value={phrase}
