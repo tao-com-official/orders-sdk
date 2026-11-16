@@ -100,6 +100,20 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
           <button type="button" title={shown ? "Hide" : "Show"} aria-label={shown ? "Hide mnemonic" : "Show mnemonic"} onClick={() => setShown((v) => !v)}>
             {shown ? "🙈" : "👁"}
           </button>
+          <button
+            type="button"
+            title="Copy"
+            aria-label="Copy mnemonic"
+            disabled={phrase.trim() === ""}
+            onClick={() =>
+              navigator.clipboard.writeText(phrase.trim()).then(
+                () => setStatus("Mnemonic copied"),
+                (e) => setStatus(`Copy failed: ${errorText(e)}`),
+              )
+            }
+          >
+            📋
+          </button>
         </div>
       </label>
       {balance !== undefined && <p className="muted">Mover balance: {balance}</p>}
