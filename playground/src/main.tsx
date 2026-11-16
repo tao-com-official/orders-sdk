@@ -79,24 +79,32 @@ function Connect({ onSession }: { onSession: (session: Session) => void }) {
   const [busy, setBusy] = useState(false);
   const extensions = installedExtensions();
 
+  const [waiting, setWaiting] = useState(false);
   const loadAccounts = async (name: string) => {
     setExtension(name);
     setAccounts(undefined);
     setError(undefined);
     if (name === "") return;
+    setWaiting(true);
     try {
+      // Extensions inject a moment after the page loads.
+      for (let tries = 0; !installedExtensions().includes(name) && tries < 20; tries++) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
       const found = await extensionAccounts(name);
       setAccounts(found);
       setAccount(found.accounts[0]?.address ?? "");
     } catch (e) {
       setError(errorText(e));
+    } finally {
+      setWaiting(false);
     }
   };
 
   // Reopen the extension remembered from last time, so its accounts are listed without re-picking it.
   useEffect(() => {
-    if (method === "extension" && extension !== "" && extensions.includes(extension)) void loadAccounts(extension);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (method === "extension" && extension !== "") void loadAccounts(extension);
+  }, [method]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const connect = async () => {
     setBusy(true);
@@ -184,6 +192,16 @@ function Connect({ onSession }: { onSession: (session: Session) => void }) {
               ))}
             </select>
           </label>
+          <button
+            className="icon"
+            title="Reload accounts"
+            aria-label="Reload accounts"
+            disabled={extension === "" || waiting}
+            onClick={() => void loadAccounts(extension)}
+          >
+            ↻
+          </button>
+          {waiting && <p className="muted">Waiting for {extension}: approve this site in the extension if it asks.</p>}
           {accounts !== undefined && accounts.accounts.length === 0 && (
             <p className="muted">{extension} shared no accounts: allow this site in the extension and pick it again.</p>
           )}
