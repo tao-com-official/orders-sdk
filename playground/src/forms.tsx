@@ -22,6 +22,23 @@ export interface Session {
 
 // ---- helpers ---------------------------------------------------------------
 
+// Per-viewer conveniences only. The seed is never stored.
+export const saved = (key: string, fallback: string) => {
+  try {
+    return localStorage.getItem(`playground.${key}`) ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+export const save = (key: string, value: string) => {
+  try {
+    localStorage.setItem(`playground.${key}`, value);
+  } catch {
+    // private window: fine
+  }
+};
+
+
 /** "1.5" → 1500000000n. Every amount and price here has 9 decimals (rao). */
 export function toRao(text: string): bigint {
   const match = /^(\d*)(?:\.(\d{0,9}))?$/.exec(text.trim());

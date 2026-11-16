@@ -1,6 +1,16 @@
 // Read-only chain reads for the playground: the wallet's balance and stake, and a subnet's spot
-// price. Same calls as the order-execution e2e suite. Order data still comes only from the SDK.
+// price, and on testnet a pool mover. Same calls as the order-execution e2e suite. Order data
+// still comes only from the SDK.
 
+import {
+  cryptoWaitReady,
+  encodeAddress,
+  mnemonicToMiniSecret,
+  mnemonicValidate,
+  sr25519PairFromSeed,
+  sr25519Sign,
+} from "@polkadot/util-crypto";
+import { getTxCreator } from "polkadot-api/tx-creator";
 import { createWsClient } from "polkadot-api/ws";
 
 type ChainApi = {
@@ -50,4 +60,63 @@ export async function walletBalances(rpc: string, address: string): Promise<{ fr
 /** Spot price of the subnet's alpha: TAO per alpha × 1e9, the scale of a limit order's prices. */
 export function alphaPrice(rpc: string, netuid: number): Promise<bigint> {
   return api(rpc).apis.SwapRuntimeApi.current_alpha_price(netuid);
+}
+
+// ---- pool mover (testnet market maker) -------------------------------------
+
+/** Reserves and fee of the subnet's pool, as the e2e suite reads them. */
+async function pool(rpc: string, netuid: number) {
+  const chain = api(rpc) as unknown as { query: any; apis: any };
+  const [spot, taoIn, alphaIn, feeRate] = await Promise.all([
+    chain.apis.SwapRuntimeApi.current_alpha_price(netuid),
+    chain.query.SubtensorModule.SubnetTAO.getValue(netuid),
+    chain.query.SubtensorModule.SubnetAlphaIn.getValue(netuid),
+    chain.query.Swap.FeeRate.getValue(netuid),
+  ]);
+  return { spot: BigInt(spot), taoIn: Number(taoIn), alphaIn: Number(alphaIn), fee: Number(feeRate) / 65535 };
+}
+
+/**
+ * Moves the subnet's spot by about `percent` (up: stake TAO, down: unstake alpha) on `hotkey`,
+ * signed by `phrase`. On the constant product spot = taoIn / alphaIn, staking x TAO scales the spot
+ * by (1 + x/taoIn)² and unstaking y alpha by (alphaIn / (alphaIn + y))²; the pool fee comes off the
+ * input first. Waits for the block; returns the spot before and after.
+ */
+export async function movePrice(
+  rpc: string,
+  phrase: string,
+  hotkey: string,
+  netuid: number,
+  percent: number,
+): Promise<{ before: bigint; after: bigint }> {
+  if (!(percent !== 0 && Math.abs(percent) < 100)) throw new Error("Step must be a non-zero percent below 100");
+  await cryptoWaitReady();
+  const pair = sr25519PairFromSeed(mnemonicToMiniSecret(phrase.trim().split(/\s+/).join(" ")));
+  const p = await pool(rpc, netuid);
+  const factor = 1 + percent / 100;
+  const [call, args] =
+    factor > 1
+      ? ([
+          "add_stake",
+          { hotkey, netuid, amount_staked: BigInt(Math.ceil((p.taoIn * (Math.sqrt(factor) - 1)) / (1 - p.fee))) },
+        ] as const)
+      : ([
+          "remove_stake",
+          { hotkey, netuid, amount_unstaked: BigInt(Math.ceil((p.alphaIn * (1 / Math.sqrt(factor) - 1)) / (1 - p.fee))) },
+        ] as const);
+  const chain = api(rpc) as unknown as { tx: any };
+  const result = await chain.tx.SubtensorModule[call](args).createAndSubmit(
+    getTxCreator(pair.publicKey, "Sr25519", (bytes: Uint8Array) => sr25519Sign(bytes, pair)),
+  );
+  if (!result.ok) {
+    throw new Error(`${call} failed: ${JSON.stringify(result.dispatchError, (_, v) => (typeof v === "bigint" ? String(v) : v))}`);
+  }
+  return { before: p.spot, after: await alphaPrice(rpc, netuid) };
+}
+
+/** SS58 of a mnemonic, to show which account moves the pool. */
+export async function addressOf(phrase: string): Promise<string> {
+  await cryptoWaitReady();
+  if (!mnemonicValidate(phrase.trim().split(/\s+/).join(" "))) throw new Error("Not a valid BIP39 mnemonic");
+  return encodeAddress(sr25519PairFromSeed(mnemonicToMiniSecret(phrase.trim().split(/\s+/).join(" "))).publicKey);
 }

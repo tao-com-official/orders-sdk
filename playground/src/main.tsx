@@ -11,29 +11,14 @@ import {
 import { Fragment, StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { CrossChainForm, errorText, fromRao, Json, LimitForm, MarketForm, type Session } from "./forms";
+import { CrossChainForm, errorText, fromRao, Json, LimitForm, MarketForm, save, saved, type Session } from "./forms";
+import { MarketMaker, PriceChart } from "./mover";
 import { walletBalances, type Stake } from "./chain";
 import { extensionAccounts, extensionWallet, installedExtensions, seedWallet, type Wallet } from "./signers";
 
 const NETWORKS: Record<Network, { api: string; rpc: string; label: string }> = {
   testnet: { api: "/svc/dev", rpc: "wss://testnet.prod.tao.com", label: "testnet · api.dev.tao.com" },
   mainnet: { api: "/svc/prod", rpc: "wss://lite.prod.tao.com", label: "mainnet · api.tao.com" },
-};
-
-// Per-viewer conveniences only. The seed is never stored.
-const saved = (key: string, fallback: string) => {
-  try {
-    return localStorage.getItem(`playground.${key}`) ?? fallback;
-  } catch {
-    return fallback;
-  }
-};
-const save = (key: string, value: string) => {
-  try {
-    localStorage.setItem(`playground.${key}`, value);
-  } catch {
-    // private window: fine
-  }
 };
 
 // ---- request log -----------------------------------------------------------
@@ -514,6 +499,7 @@ function History({ session, refresh }: { session: Session; refresh: number }) {
             <h4>Order {detail.id}</h4>
             <button onClick={() => setDetail(undefined)}>Close</button>
           </div>
+          <PriceChart session={session} order={detail} />
           <Json value={detail} />
         </div>
       )}
@@ -550,6 +536,7 @@ function App() {
         </main>
       ) : (
         <main className="grid">
+          <div className="stack">
           <div className="card">
             <nav className="tabs">
               {Object.entries(TABS).map(([id, label]) => (
@@ -568,6 +555,8 @@ function App() {
             {tab === "market" && <MarketForm session={session} onPlaced={placed} />}
             {tab === "limit" && <LimitForm session={session} onPlaced={placed} />}
             {tab === "crosschain" && <CrossChainForm />}
+          </div>
+          <MarketMaker session={session} onMoved={placed} />
           </div>
           <div className="stack">
             <Balances session={session} refresh={refresh} />

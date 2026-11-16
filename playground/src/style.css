@@ -69,3 +69,11 @@ code { overflow-wrap: anywhere; }
 tr.leg td { background: var(--bg); }
 tr.leg td:first-child { padding-left: 28px; }
 .twisty { padding: 0 6px; margin-right: 6px; }
+.chart svg { width: 100%; height: auto; display: block; margin: 8px 0; }
+.chart line { stroke-width: 1.5; stroke-dasharray: 5 4; }
+.chart text { font-size: 12px; }
+.chart .waiting line { stroke: var(--warn); }
+.chart .waiting text { fill: var(--warn); }
+.chart .crossed line { stroke: var(--good); }
+.chart .crossed text { fill: var(--good); }
+.chart .spot { fill: none; stroke: var(--accent); stroke-width: 2; }
