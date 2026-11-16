@@ -11,6 +11,7 @@ import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { CrossChainForm, errorText, fromRao, Json, LimitForm, MarketForm, type Session } from "./forms";
+import { walletBalances, type Stake } from "./chain";
 import { extensionAccounts, extensionWallet, installedExtensions, seedWallet, type Wallet } from "./signers";
 
 const NETWORKS: Record<Network, { api: string; rpc: string; label: string }> = {
@@ -140,7 +141,7 @@ function Connect({ onSession }: { onSession: (session: Session) => void }) {
       save("extension", extension);
       save("hotkey", hotkey.trim());
       setSeed("");
-      onSession({ client, wallet, network });
+      onSession({ client, wallet, network, rpc });
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -231,6 +232,54 @@ const short = (urn: string) => {
   const parts = urn.split(":");
   return parts[parts.length - 1] === "native" ? "TAO" : `α${parts[parts.length - 1]}`;
 };
+
+function Balances({ session, refresh }: { session: Session; refresh: number }) {
+  const [balances, setBalances] = useState<{ free: bigint; stakes: Stake[] }>();
+  const [error, setError] = useState<string>();
+  const load = useCallback(async () => {
+    setError(undefined);
+    try {
+      setBalances(await walletBalances(session.rpc, session.wallet.address));
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }, [session]);
+  useEffect(() => {
+    void load();
+  }, [load, refresh]);
+
+  return (
+    <section className="card">
+      <div className="row spread">
+        <h3>Balances</h3>
+        <span className="muted">
+          from the chain <button onClick={() => void load()}>Refresh</button>
+        </span>
+      </div>
+      {error !== undefined && <pre className="error">{error}</pre>}
+      {balances !== undefined && (
+        <table>
+          <tbody>
+            <tr>
+              <td>free TAO</td>
+              <td />
+              <td>{fromRao(String(balances.free))}</td>
+            </tr>
+            {balances.stakes.map((s) => (
+              <tr key={`${s.netuid}:${s.hotkey}`}>
+                <td>netuid {s.netuid}</td>
+                <td>
+                  <code title={s.hotkey}>{`${s.hotkey.slice(0, 6)}…${s.hotkey.slice(-4)}`}</code>
+                </td>
+                <td>{fromRao(String(s.stake))} α</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
 
 function History({ session, refresh }: { session: Session; refresh: number }) {
   const [tab, setTab] = useState<"orders" | "activity">("orders");
@@ -447,7 +496,10 @@ function App() {
             {tab === "limit" && <LimitForm session={session} onPlaced={placed} />}
             {tab === "crosschain" && <CrossChainForm />}
           </div>
-          <History session={session} refresh={refresh} />
+          <div className="stack">
+            <Balances session={session} refresh={refresh} />
+            <History session={session} refresh={refresh} />
+          </div>
         </main>
       )}
       <section className="card log">

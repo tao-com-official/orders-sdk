@@ -65,3 +65,4 @@ tr { cursor: pointer; }
 .code.c4, .code.c5 { color: var(--bad); }
 details summary { cursor: pointer; padding: 2px 0; overflow-wrap: anywhere; }
 code { overflow-wrap: anywhere; }
+.stack { display: grid; gap: 16px; min-width: 0; }

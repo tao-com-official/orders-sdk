@@ -7,7 +7,8 @@ import {
   type OrderLegInput,
   type OrderServiceClient,
 } from "@tao.com/orders-sdk";
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { alphaPrice } from "./chain";
 
 import type { Wallet } from "./signers";
 
@@ -15,6 +16,8 @@ export interface Session {
   client: OrderServiceClient;
   wallet: Wallet;
   network: Network;
+  /** Bittensor RPC of the network, for read-only chain reads. */
+  rpc: string;
 }
 
 // ---- helpers ---------------------------------------------------------------
@@ -262,7 +265,22 @@ export function LimitForm({ session, onPlaced }: { session: Session; onPlaced: (
   const [stopLoss, setStopLoss] = useState("");
   const [takeProfit, setTakeProfit] = useState("");
   const [authored, setAuthored] = useState<AuthoredOrder>();
+  const [spot, setSpot] = useState<string>();
   const { busy, run, view, setStatus } = useRun();
+
+  // The subnet's spot price from the chain, to pick a trigger against.
+  const readSpot = useCallback(async () => {
+    setSpot(undefined);
+    if (!/^\d+$/.test(netuid.trim())) return;
+    try {
+      setSpot(`${fromRao(String(await alphaPrice(session.rpc, Number(netuid))))} TAO per alpha`);
+    } catch (e) {
+      setSpot(`price unavailable: ${errorText(e)}`);
+    }
+  }, [netuid, session.rpc]);
+  useEffect(() => {
+    void readSpot();
+  }, [readSpot]);
 
   const buy = product === "LIMIT_BUY" || product === "MARKET_BUY";
   const priced = product === "LIMIT_BUY" || product === "TAKE_PROFIT" || product === "STOP_LOSS";
@@ -341,6 +359,9 @@ export function LimitForm({ session, onPlaced }: { session: Session; onPlaced: (
         ))}
       </nav>
       <p className="muted">{PRODUCTS.find((p) => p.id === product)?.note}</p>
+      <p className="muted">
+        Spot on netuid {netuid}: {spot ?? "…"} <button onClick={() => void readSpot()}>↻</button>
+      </p>
       <div className="row">
         <Text label="Netuid" value={netuid} set={setNetuid} />
         <Text label="Hotkey" value={hotkey} set={setHotkey} placeholder="default from settings" />
