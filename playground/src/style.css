@@ -80,3 +80,7 @@ tr.leg td:first-child { padding-left: 28px; }
 .row.inline { flex-wrap: nowrap; align-items: stretch; margin: 0; }
 .row.inline input { flex: 1 1 auto; min-width: 0; }
 .icon { margin-left: 8px; padding: 2px 8px; }
+button { cursor: pointer; transition: transform 80ms ease, filter 80ms ease, background 120ms ease; }
+button:hover:not(:disabled) { filter: brightness(0.95); }
+button:active:not(:disabled) { transform: scale(0.94); filter: brightness(0.85); }
+button:disabled { cursor: default; }
