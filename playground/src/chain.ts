@@ -104,6 +104,17 @@ export async function movePrice(
           "remove_stake",
           { hotkey, netuid, amount_unstaked: BigInt(Math.ceil((p.alphaIn * (1 / Math.sqrt(factor) - 1)) / (1 - p.fee))) },
         ] as const);
+  if (call === "remove_stake") {
+    // Only alpha this account holds on the hotkey can be sold; the chain answers a bare AmountTooLow.
+    const { stakes } = await walletBalances(rpc, encodeAddress(pair.publicKey));
+    const held = stakes.find((s) => s.netuid === netuid && s.hotkey === hotkey)?.stake ?? 0n;
+    if (held < args.amount_unstaked) {
+      throw new Error(
+        `Moving down ${(-percent).toFixed(2)}% sells ${Number(args.amount_unstaked) / 1e9} α, but this account holds ` +
+          `${Number(held) / 1e9} α on that hotkey. The pool goes down by selling alpha bought earlier: lift it with ↑ first.`,
+      );
+    }
+  }
   const chain = api(rpc) as unknown as { tx: any };
   const result = await chain.tx.SubtensorModule[call](args).createAndSubmit(
     getTxCreator(pair.publicKey, "Sr25519", (bytes: Uint8Array) => sr25519Sign(bytes, pair)),
