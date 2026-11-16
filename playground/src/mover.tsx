@@ -7,15 +7,13 @@ import { useCallback, useEffect, useState } from "react";
 import { addressOf, alphaPrice, movePrice, walletBalances } from "./chain";
 import { errorText, fromRao, save, saved, toRao, type Session } from "./forms";
 
-// The e2e suite's LIMIT_MOVER_HOTKEY: a testnet validator on netuid 10 other than the order hotkey.
-const MOVER_HOTKEY = "5GpM9BDQTbY1Mgxpm3hLApjpBpy1NSssXnbzDuEJSiSgYyni";
-
 export function MarketMaker({ session, onMoved }: { session: Session; onMoved: () => void }) {
   // ponytail: the mover's mnemonic sits in localStorage as asked, testnet only; a throwaway key.
   const [phrase, setPhrase] = useState(saved("mover.seed", ""));
   const [address, setAddress] = useState<string>();
   const [netuid, setNetuid] = useState(saved("mover.netuid", "10"));
-  const [hotkey, setHotkey] = useState(saved("mover.hotkey", MOVER_HOTKEY));
+  // The same hotkey as the orders: stake is per coldkey, so the mover's alpha never mixes with the wallet's.
+  const hotkey = session.hotkey;
   const [step, setStep] = useState(saved("mover.step", "1"));
   const [target, setTarget] = useState("");
   const [shown, setShown] = useState(false);
@@ -67,7 +65,6 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
     setStatus("Moving the pool, waiting for the block…");
     save("mover.seed", phrase.trim());
     save("mover.netuid", netuid);
-    save("mover.hotkey", hotkey.trim());
     save("mover.step", step);
     try {
       const percent =
@@ -90,7 +87,8 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
     <section className="card">
       <h3>Market maker (testnet)</h3>
       <p className="muted">
-        Moves the pool with its own account: ↑ stakes TAO, ↓ unstakes alpha on the hotkey below. The key is kept in this
+        Moves the pool with its own account: ↑ stakes TAO, ↓ unstakes alpha, on the default validator hotkey{" "}
+        <code>{hotkey !== "" ? `${hotkey.slice(0, 6)}…${hotkey.slice(-4)}` : "(none set)"}</code>. The key is kept in this
         browser's localStorage, so use a testnet-only account.
       </p>
       <label className="field">
@@ -129,19 +127,15 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
           <input value={netuid} onChange={(e) => setNetuid(e.target.value)} />
         </label>
         <label className="field">
-          <span>Hotkey</span>
-          <input value={hotkey} onChange={(e) => setHotkey(e.target.value)} />
-        </label>
-        <label className="field">
           <span>Step %</span>
           <input value={step} onChange={(e) => setStep(e.target.value)} />
         </label>
       </div>
       <div className="row">
-        <button disabled={busy || address === undefined} onClick={() => void move(Number(step))}>
+        <button disabled={busy || address === undefined || hotkey === ""} onClick={() => void move(Number(step))}>
           ↑ {step}%
         </button>
-        <button disabled={busy || address === undefined} onClick={() => void move(-Number(step))}>
+        <button disabled={busy || address === undefined || hotkey === ""} onClick={() => void move(-Number(step))}>
           ↓ {step}%
         </button>
         <span className="muted">
@@ -154,7 +148,7 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
           <span>Target price (TAO per alpha)</span>
           <input value={target} onChange={(e) => setTarget(e.target.value)} placeholder={spot !== undefined ? fromRao(String(spot)) : ""} />
         </label>
-        <button disabled={busy || address === undefined || target.trim() === ""} onClick={() => void move("target")}>
+        <button disabled={busy || address === undefined || hotkey === "" || target.trim() === ""} onClick={() => void move("target")}>
           Move to price
         </button>
       </div>

@@ -18,6 +18,8 @@ export interface Session {
   network: Network;
   /** Bittensor RPC of the network, for read-only chain reads. */
   rpc: string;
+  /** The default validator hotkey: orders and the testnet market maker both use it. */
+  hotkey: string;
 }
 
 // ---- helpers ---------------------------------------------------------------

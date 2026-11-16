@@ -135,7 +135,7 @@ function Connect({ onSession }: { onSession: (session: Session) => void }) {
       save("extension", extension);
       save("hotkey", hotkey.trim());
       setSeed("");
-      onSession({ client, wallet, network, rpc });
+      onSession({ client, wallet, network, rpc, hotkey: hotkey.trim() });
     } catch (e) {
       setError(errorText(e));
     } finally {
