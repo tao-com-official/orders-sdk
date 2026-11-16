@@ -12,7 +12,7 @@ import { Fragment, StrictMode, useCallback, useEffect, useRef, useState } from "
 import { createRoot } from "react-dom/client";
 
 import { CrossChainForm, errorText, fromRao, Json, LimitForm, MarketForm, save, saved, type Session } from "./forms";
-import { MarketMaker, PriceChart } from "./mover";
+import { MARKET_SENTINEL, MarketMaker, PriceChart } from "./mover";
 import { walletBalances, type Stake } from "./chain";
 import { extensionAccounts, extensionWallet, installedExtensions, seedWallet, type Wallet } from "./signers";
 
@@ -463,7 +463,9 @@ function History({ session, refresh }: { session: Session; refresh: number }) {
                         {c.source.amount !== undefined ? `${fromRao(c.source.amount)} ` : ""}
                         {short(c.source.currency)} → {short(c.destination.currency)}
                         {c.limit?.triggerPrice !== undefined &&
-                          ` · trigger ${fromRao(c.limit.triggerPrice.value)} ${c.limit.triggerPrice.currency === "USD" ? "USD" : "TAO"}`}
+                          (c.limit.triggerPrice.value === MARKET_SENTINEL
+                            ? " · at market"
+                            : ` · trigger ${fromRao(c.limit.triggerPrice.value)} ${c.limit.triggerPrice.currency === "USD" ? "USD" : "TAO"}`)}
                       </div>
                     </td>
                     <td className="muted">{new Date(c.updatedAt).toLocaleString()}</td>

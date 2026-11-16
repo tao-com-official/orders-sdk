@@ -159,6 +159,9 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
 
 // ---- chart -----------------------------------------------------------------
 
+/** A Market Buy's entry fills at market: the service signs it with this trigger, no real price. */
+export const MARKET_SENTINEL = "18446744073709551615";
+
 /** A limit component fires when the spot falls to its trigger (buy, stop loss) or rises to it (take profit). */
 const firesAbove = (c: OrderComponent) => c.limit?.type === "TAKE_PROFIT" || c.role === "TAKE_PROFIT";
 
@@ -182,7 +185,10 @@ export function PriceChart({ session, order }: { session: Session; order: Order 
   }, [netuid, order.id, session.rpc]);
 
   const legs = (order._embedded?.components ?? []).filter(
-    (c) => c.limit?.triggerPrice !== undefined && c.limit.triggerPrice.currency !== "USD",
+    (c) =>
+      c.limit?.triggerPrice !== undefined &&
+      c.limit.triggerPrice.currency !== "USD" &&
+      c.limit.triggerPrice.value !== MARKET_SENTINEL,
   );
   if (netuid === undefined || legs.length === 0) return null;
   const spot = series[series.length - 1];
