@@ -24,7 +24,14 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
   useEffect(() => {
     setAddress(undefined);
     if (phrase.trim() === "") return;
-    addressOf(phrase).then(setAddress, (e) => setStatus(errorText(e)));
+    addressOf(phrase).then(
+      (a) => {
+        setAddress(a);
+        setStatus(undefined);
+        save("mover.seed", phrase.trim());
+      },
+      (e) => setStatus(errorText(e)),
+    );
   }, [phrase]);
 
   const [balance, setBalance] = useState<string>();
