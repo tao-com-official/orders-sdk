@@ -46,7 +46,13 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
     walletBalances(session.rpc, address).then(
       ({ free, stakes }) => {
         const alpha = stakes.find((s) => s.netuid === Number(netuid) && s.hotkey === hotkey.trim())?.stake ?? 0n;
-        setBalance(`${fromRao(String(free)) || "0"} TAO free · ${fromRao(String(alpha)) || "0"} α staked here`);
+        const elsewhere = stakes
+          .filter((s) => s.netuid === Number(netuid) && s.hotkey !== hotkey.trim())
+          .map((s) => `${fromRao(String(s.stake))} α on ${s.hotkey.slice(0, 6)}…${s.hotkey.slice(-4)}`);
+        setBalance(
+          `${fromRao(String(free)) || "0"} TAO free · ${fromRao(String(alpha)) || "0"} α staked here` +
+            (elsewhere.length > 0 ? ` · also ${elsewhere.join(", ")}` : ""),
+        );
       },
       (e) => setBalance(errorText(e)),
     );

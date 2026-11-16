@@ -109,9 +109,15 @@ export async function movePrice(
     const { stakes } = await walletBalances(rpc, encodeAddress(pair.publicKey));
     const held = stakes.find((s) => s.netuid === netuid && s.hotkey === hotkey)?.stake ?? 0n;
     if (held < args.amount_unstaked) {
+      const elsewhere = stakes
+        .filter((s) => s.netuid === netuid && s.hotkey !== hotkey)
+        .map((s) => `${Number(s.stake) / 1e9} α on ${s.hotkey}`);
       throw new Error(
         `Moving down ${(-percent).toFixed(2)}% sells ${Number(args.amount_unstaked) / 1e9} α, but this account holds ` +
-          `${Number(held) / 1e9} α on that hotkey. The pool goes down by selling alpha bought earlier: lift it with ↑ first.`,
+          `${Number(held) / 1e9} α on that hotkey. ` +
+          (elsewhere.length > 0
+            ? `It holds ${elsewhere.join(", ")}: put that hotkey in the Hotkey field to sell from it.`
+            : "The pool goes down by selling alpha bought earlier: lift it with ↑ first."),
       );
     }
   }
