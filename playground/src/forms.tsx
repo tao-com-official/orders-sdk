@@ -251,7 +251,7 @@ export function MarketForm({ session, onPlaced }: { session: Session; onPlaced: 
           Quote
         </button>
         <button className="primary" disabled={busy || authored === undefined || authored.warnings.length > 0} onClick={place}>
-          Sign & Place
+          {"Sign & Place"}
         </button>
       </div>
       {view}
@@ -417,7 +417,7 @@ export function LimitForm({ session, onPlaced }: { session: Session; onPlaced: (
           Author
         </button>
         <button className="primary" disabled={busy || authored === undefined || authored.warnings.length > 0} onClick={place}>
-          Sign & Place
+          {"Sign & Place"}
         </button>
       </div>
       {view}
