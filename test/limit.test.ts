@@ -222,6 +222,15 @@ describe("limit plans", () => {
       provenanceToken: "t-tp",
     });
   });
+
+  it("reads a pending plan without its token as an order with no next step, not an error", async () => {
+    const { fetch } = fakeFetch(hal(200, plan("PENDING_SIGNATURES", next, { instruction: raw("0xtp") })));
+    const client = new OrderServiceClient({ baseUrl: BASE, auth: "jwt", fetch });
+    const order = await client.getOrder("p1");
+    expect(order.status).toBe("PENDING_SIGNATURES");
+    expect(order.nextSignature).toBeUndefined();
+    expect(order).not.toHaveProperty("instruction");
+  });
 });
 
 describe("limit wire shapes and plan guards", () => {

@@ -194,19 +194,28 @@ function wireLeg(
 
 type OrderBody = Omit<Order, "id" | "nextSignature"> & { instruction?: Instruction };
 
-/** A 202 is a plan with more to sign: its next instruction, link and token. */
-function orderFromResponse(response: { status: number; headers: Headers; body: OrderBody }): Order {
-  const { instruction, ...body } = response.body;
-  const order = withId(body);
-  const href = body._links.instruction?.href;
+/** A plan's next step, when the response carries all of it: instruction, link and token. */
+function nextSignatureOf(response: { headers: Headers; body: OrderBody }): NextSignature | undefined {
+  const instruction = response.body.instruction;
+  const href = response.body._links.instruction?.href;
   const provenanceToken = response.headers.get("x-provenance-token");
+  return instruction !== undefined && href !== undefined && provenanceToken !== null
+    ? { instruction, href, provenanceToken }
+    : undefined;
+}
+
+/** A 202 is a plan with more to sign: without its next instruction, link and token, nothing can be signed. */
+function orderFromResponse(response: { status: number; headers: Headers; body: OrderBody }): Order {
+  const { instruction: _, ...body } = response.body;
+  const order = withId(body);
   if (response.status !== 202) return order;
-  if (instruction === undefined || href === undefined || provenanceToken === null) {
+  const nextSignature = nextSignatureOf(response);
+  if (nextSignature === undefined) {
     throw new UnexpectedResponseError(
       "order service answered 202 without the next instruction, link or X-Provenance-Token",
     );
   }
-  return { ...order, nextSignature: { instruction, href, provenanceToken } };
+  return { ...order, nextSignature };
 }
 
 function lastSegment(href: string): string {
@@ -340,11 +349,13 @@ export class OrderServiceClient {
       path: `${BASE}/orders/${encodeURIComponent(orderId)}`,
       authenticated: true,
     });
-    // A pending plan answers 200: its next step is there when it has an instruction link.
-    return orderFromResponse({
-      ...response,
-      status: response.body._links.instruction !== undefined ? 202 : response.status,
-    });
+    // A pending plan answers 200. The GET handler sends the instruction, its link and
+    // X-Provenance-Token while the order has a signing step (order-service
+    // src/adaptors/api/orders/routes.ts, GET /orders/v2/orders/:id). A read never throws for a
+    // missing part: the order comes back without `nextSignature`.
+    const nextSignature = nextSignatureOf(response);
+    const order = orderFromResponse(response);
+    return nextSignature !== undefined ? { ...order, nextSignature } : order;
   }
 
   /** Allowed while `OPEN` or `PENDING_SIGNATURES`; otherwise throws `OrderServiceError` with code `cancel-not-allowed`. */
