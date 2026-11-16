@@ -18,6 +18,7 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
   const [hotkey, setHotkey] = useState(saved("mover.hotkey", MOVER_HOTKEY));
   const [step, setStep] = useState(saved("mover.step", "1"));
   const [target, setTarget] = useState("");
+  const [shown, setShown] = useState(false);
   const [spot, setSpot] = useState<bigint>();
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string>();
@@ -88,7 +89,18 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
       </p>
       <label className="field">
         <span>Mover mnemonic {address !== undefined && <code>{address}</code>}</span>
-        <input type="password" value={phrase} onChange={(e) => setPhrase(e.target.value)} autoComplete="off" />
+        <div className="row">
+          <input
+            type={shown ? "text" : "password"}
+            value={phrase}
+            onChange={(e) => setPhrase(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button type="button" title={shown ? "Hide" : "Show"} aria-label={shown ? "Hide mnemonic" : "Show mnemonic"} onClick={() => setShown((v) => !v)}>
+            {shown ? "🙈" : "👁"}
+          </button>
+        </div>
       </label>
       {balance !== undefined && <p className="muted">Mover balance: {balance}</p>}
       <div className="row">
