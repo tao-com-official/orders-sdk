@@ -74,7 +74,11 @@ function Connect({ onSession }: { onSession: (session: Session) => void }) {
   const [extension, setExtension] = useState(saved("extension", ""));
   const [accounts, setAccounts] = useState<Awaited<ReturnType<typeof extensionAccounts>>>();
   const [account, setAccount] = useState("");
-  const [hotkey, setHotkey] = useState(saved("hotkey", "") || E2E_HOTKEY);
+  const [hotkey, setHotkey] = useState(saved("hotkey", ""));
+  // The e2e validator is a testnet default only: it is filled in on testnet and dropped on mainnet.
+  useEffect(() => {
+    setHotkey((h) => (network === "testnet" ? h || E2E_HOTKEY : h === E2E_HOTKEY ? "" : h));
+  }, [network]);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const extensions = installedExtensions();

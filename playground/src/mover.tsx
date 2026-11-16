@@ -9,7 +9,8 @@ import { errorText, fromRao, save, saved, toRao, type Session } from "./forms";
 
 export function MarketMaker({ session, onMoved }: { session: Session; onMoved: () => void }) {
   // ponytail: the mover's mnemonic sits in localStorage as asked, testnet only; a throwaway key.
-  const [phrase, setPhrase] = useState(saved("mover.seed", ""));
+  // Read only on testnet, where the block is shown: the stored key never loads on mainnet.
+  const [phrase, setPhrase] = useState(() => (session.network === "testnet" ? saved("mover.seed", "") : ""));
   const [address, setAddress] = useState<string>();
   const [netuid, setNetuid] = useState(saved("mover.netuid", "10"));
   // The same hotkey as the orders: stake is per coldkey, so the mover's alpha never mixes with the wallet's.
