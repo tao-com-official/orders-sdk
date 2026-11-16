@@ -377,7 +377,7 @@ export function LimitForm({ session, onPlaced }: { session: Session; onPlaced: (
       </nav>
       <p className="muted">{PRODUCTS.find((p) => p.id === product)?.note}</p>
       <p className="muted">
-        Spot on netuid {netuid}: {spot ?? "…"} <button onClick={() => void readSpot()}>↻</button>
+        Spot on netuid {netuid}: {spot ?? "…"} <button className="icon" title="Refresh" aria-label="Refresh" onClick={() => void readSpot()}>↻</button>
       </p>
       <div className="row">
         <Text label="Netuid" value={netuid} set={setNetuid} />

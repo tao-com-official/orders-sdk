@@ -243,7 +243,7 @@ function Balances({ session, refresh }: { session: Session; refresh: number }) {
       <div className="row spread">
         <h3>Balances</h3>
         <span className="muted">
-          from the chain <button onClick={() => void load()}>Refresh</button>
+          from the chain <button className="icon" title="Refresh" aria-label="Refresh" onClick={() => void load()}>↻</button>
         </span>
       </div>
       {error !== undefined && <pre className="error">{error}</pre>}
@@ -381,7 +381,7 @@ function History({ session, refresh }: { session: Session; refresh: number }) {
         <span className="muted">
           {live ? "live · " : ""}
           {loadedAt}
-          <button onClick={() => void load()}>Refresh</button>
+          <button className="icon" title="Refresh" aria-label="Refresh" onClick={() => void load()}>↻</button>
         </span>
       </div>
       {error !== undefined && <pre className="error">{error}</pre>}

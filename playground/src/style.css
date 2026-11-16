@@ -79,3 +79,4 @@ tr.leg td:first-child { padding-left: 28px; }
 .chart .spot { fill: none; stroke: var(--accent); stroke-width: 2; }
 .row.inline { flex-wrap: nowrap; align-items: stretch; margin: 0; }
 .row.inline input { flex: 1 1 auto; min-width: 0; }
+.icon { margin-left: 8px; padding: 2px 8px; }

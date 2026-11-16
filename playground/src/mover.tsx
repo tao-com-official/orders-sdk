@@ -140,7 +140,7 @@ export function MarketMaker({ session, onMoved }: { session: Session; onMoved: (
         </button>
         <span className="muted">
           Spot: {spot !== undefined ? `${fromRao(String(spot))} TAO per alpha` : "…"}{" "}
-          <button onClick={readSpot}>↻</button>
+          <button className="icon" title="Refresh" aria-label="Refresh" onClick={readSpot}>↻</button>
         </span>
       </div>
       <div className="row">
