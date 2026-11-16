@@ -236,9 +236,11 @@ const pushRef: { current: (e: LogEntry) => void } = { current: () => {} };
 
 // ---- history ---------------------------------------------------------------
 
-// A plan lists as one row whose `limit` is only its entry's, so a plan and a single limit order look
-// alike: every limit row expands to its components from getOrder (a single order has one).
-const isPlan = (o: OrderSummary) => o.limit !== undefined;
+// A plan (Profit Lock, Market Buy, a Limit Buy with SL/TP) lists as one row with the plan's limit;
+// its components are in getOrder.
+const isPlan = (o: OrderSummary) =>
+  o.limit !== undefined &&
+  (o.limit.type === "PROFIT_LOCK" || o.limit.type === "MARKET_BUY" || o.limit.stopLoss !== undefined || o.limit.takeProfit !== undefined);
 
 const short = (urn: string) => {
   const parts = urn.split(":");
