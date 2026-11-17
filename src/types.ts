@@ -73,7 +73,7 @@ export interface OrderLegInput {
  * pays out at least that much, and the authored order carries both amounts.
  */
 export type AuthorOrderRequest = {
-  /** Coldkey SS58. Must equal the `username` claim of the bearer token. */
+  /** Coldkey SS58 that signs the order. With a wallet token it must equal the token's `username`; with an API key token it can be any wallet. */
   signerAddress: string;
 } & (
   | { source: OrderLegInput & { amount: Amount }; destination: OrderLegInput & { amount?: never } }
