@@ -226,6 +226,8 @@ export class OrderServiceClient {
       method: "POST",
       path: `${BASE}/orders/${encodeURIComponent(orderId)}/cancel`,
       authenticated: true,
+      // The service needs a JSON object here: no body is a 415, an empty JSON body a 400.
+      body: {},
     });
     return withId(body);
   }
