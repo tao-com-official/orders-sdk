@@ -51,7 +51,7 @@ An order that is registered still has to execute on chain. See [Order status](#o
 
 ## Authentication
 
-Every order call needs a Bearer JWT. The API gateway verifies it, and the order service requires its `username` claim to equal the order's `signerAddress`, otherwise it answers 403. The token comes from the TAO.com authentication service by proving ownership of the wallet: it sends a challenge, the wallet signs it, and the service returns an access token and a refresh token.
+Every order call needs a Bearer JWT, which the API gateway verifies. There are two kinds. A **partner app** uses its API key (see [Partner apps](#partner-apps-api-key-and-partner-id)). A **wallet** signs in itself: the order service then requires the token's `username` claim to equal the order's `signerAddress`, otherwise it answers 403. The wallet token comes from the TAO.com authentication service by proving ownership of the wallet: it sends a challenge, the wallet signs it, and the service returns an access token and a refresh token.
 
 `createWalletAuth` does this and keeps the token current. `getToken()` signs in when needed, reuses the token until shortly before it expires, then refreshes it; when the refresh token nears the end of its life it signs in again. Concurrent callers share one login. Pass it to the client as `auth: () => walletAuth.getToken()`.
 
@@ -77,6 +77,39 @@ const walletAuth = createWalletAuth({
 ```
 
 To exchange once by hand: `exchangeToken({ subjectToken, actorTokenType, actorToken, params })` returns `{ accessToken, tokenType, expiresIn }`. What `actorToken` must contain, and which `params` a type needs, is defined by the auth service. If it answers `invalid_grant` the wallet token was rejected; the SDK signs in again and retries once.
+
+### Partner apps: API key and partner ID
+
+If you build an app on top of TAO.com, get an **API key** from the TAO.com partner dashboard and set your partner ID
+there. The API key authenticates your app; your users' wallets still sign every order. Every order your app registers
+with the key is attributed to your partner ID for revenue share: your keys carry it, and TAO.com's API gateway
+passes it to the order service, so you don't pass it.
+
+```ts
+import { createApiKeyAuth, OrderServiceClient } from "@tao.com/orders-sdk";
+
+const appAuth = createApiKeyAuth({
+  apiKey: process.env.TAO_API_KEY!,
+  apiSecret: process.env.TAO_API_SECRET!,
+});
+
+const client = new OrderServiceClient({ auth: () => appAuth.getToken() });
+
+await client.placeMarketOrder({
+  source, destination,
+  signerAddress: userColdkey,                // the user's wallet
+  signer: signWithUsersWallet,               // the user's wallet signs; the service verifies it
+});
+```
+
+With this token you can author and register orders for any wallet, `getOrder` the orders you registered, and sign their
+remaining steps. Listing, cancelling and deleting a wallet's orders need that wallet's own token (`createWalletAuth`).
+
+Orders registered before you set a partner ID in the dashboard aren't attributed.
+
+`createApiKeyAuth` runs on a server only: in a browser the API secret would be visible to your users, so it refuses to
+start there. A browser app gets the token from its own backend and passes it as `auth: () => fetchTokenFromYourServer()`.
+The secret is sent only over HTTPS (plain HTTP only to `localhost`).
 
 ## Signing
 

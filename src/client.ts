@@ -28,7 +28,8 @@ export interface OrderServiceClientOptions {
    */
   baseUrl?: string;
   /**
-   * Bearer JWT whose `username` claim is the signer's coldkey SS58. A function is called
+   * Bearer JWT: a partner app's API key token (`createApiKeyAuth`), or a wallet token whose
+   * `username` claim is the signer's coldkey SS58 (`createWalletAuth`). A function is called
    * per request so tokens can be refreshed.
    */
   auth?: AuthSource;
