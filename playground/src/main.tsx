@@ -15,6 +15,7 @@ import { CrossChainForm, errorText, fromRao, Json, LimitForm, MarketForm, save, 
 import { MARKET_SENTINEL, MarketMaker, PriceChart } from "./mover";
 import { walletBalances, type Stake } from "./chain";
 import { extensionAccounts, extensionWallet, installedExtensions, seedWallet, type Wallet } from "./signers";
+import { E2E_HOTKEY } from "../../src/hotkeys";
 
 const NETWORKS: Record<Network, { api: string; rpc: string; label: string }> = {
   testnet: { api: "/svc/dev", rpc: "wss://testnet.prod.tao.com", label: "testnet · api.dev.tao.com" },
@@ -63,9 +64,6 @@ function loggedFetch(push: (entry: LogEntry) => void): typeof fetch {
 }
 
 // ---- wallet ----------------------------------------------------------------
-
-// Testnet validator on netuid 10 the order-execution e2e suite stakes to (LIMIT_HOTKEY).
-const E2E_HOTKEY = "5CMHJBjpSCQv5r6V5cDKe8wLoJ8SGdkj9bPtw5gsPE5ENzL1";
 
 function Connect({ onSession }: { onSession: (session: Session) => void }) {
   const [network, setNetwork] = useState<Network>(saved("network", "testnet") as Network);
