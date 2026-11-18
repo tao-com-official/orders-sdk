@@ -361,10 +361,10 @@ export class OrderServiceClient {
   /** Allowed while `OPEN` or `PENDING_SIGNATURES`; otherwise throws `OrderServiceError` with code `cancel-not-allowed`. */
   async cancelOrder(orderId: string): Promise<Order> {
     const { body } = await this.http.request<Omit<Order, "id">>({
-      method: "POST",
+      method: "PUT",
       path: `${BASE}/orders/${encodeURIComponent(orderId)}/cancel`,
       authenticated: true,
-      // The service answers 415 to a POST with no content type, and 400 to an empty JSON body.
+      // The service answers 415 to a PUT with no content type, and 400 to an empty JSON body.
       body: {},
     });
     return withId(body);

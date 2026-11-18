@@ -29,7 +29,7 @@ export interface HttpResponse<T> {
 }
 
 export interface RequestInput {
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PUT";
   path: string;
   query?: Record<string, string | number | undefined>;
   body?: unknown;

@@ -255,7 +255,7 @@ describe("getOrder / cancelOrder", () => {
     const cancelled = await client.cancelOrder("ord_123");
     expect(cancelled.status).toBe("CANCELLED");
     expect(calls[1]?.url.pathname).toBe("/orders/v2/orders/ord_123/cancel");
-    expect(calls[1]?.init.method).toBe("POST");
+    expect(calls[1]?.init.method).toBe("PUT");
     expect(calls[1]?.body).toEqual({});
     expect(calls[1]?.headers.get("content-type")).toBe("application/json");
   });
