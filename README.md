@@ -219,28 +219,81 @@ An order's status is the last thing the matcher reported:
 | `FILLED` | Executed on chain. |
 | `FAILED` | The order did not execute. The event's `failureReason` says why. |
 | `ERROR` | The matcher reported an error with the order. See the event's `failureReason`. |
-| `CANCELLED` | You cancelled it while it was `OPEN`. |
+| `CANCELLED` | You cancelled it while it was `OPEN` (or `PENDING_SIGNATURES`). |
+| `EXPIRED` | A limit order reached its `expiresAt` unfilled. |
+| `PENDING_SIGNATURES` | A limit plan with components still to sign. Not listed by `listOrders`. |
 
-`FILLED`, `FAILED` and `CANCELLED` are final. Poll `getOrder` until the order reaches one of them.
+`FILLED`, `FAILED`, `CANCELLED` and `EXPIRED` are final (`TERMINAL_ORDER_STATUSES`). Poll `getOrder` until the order reaches one of them.
 
 ```ts
-await client.cancelOrder(id);   // only while OPEN; otherwise throws `cancel-not-allowed`
+await client.cancelOrder(id);   // while OPEN or PENDING_SIGNATURES; otherwise throws `cancel-not-allowed`
 
 let page = await client.listOrders({ status: "FILLED", limit: 20 });   // your orders, market orders by default
 while (page.nextCursor) page = await client.listOrders({ cursor: page.nextCursor });
 ```
 
-`listOrders` also filters by `orderType` and `orderCategory` and returns `{ orders, nextCursor, prevCursor }`. It can filter by `OPEN`, `SUBMITTED`, `FILLED`, `FAILED` and `CANCELLED`.
+`listOrders` also filters by `orderType` and `orderCategory` and returns `{ orders, nextCursor, prevCursor }`. It can filter by `OPEN`, `SUBMITTED`, `FILLED`, `FAILED`, `CANCELLED` and `EXPIRED`. It lists market orders unless you pass `orderCategory: "BITTENSOR_LIMIT"`.
+
+## Limit orders
+
+A limit order uses the same author → sign → register flow as a market order, with a `limit` on the request. `placeLimitOrder` does all three:
+
+```ts
+const order = await client.placeLimitOrder({
+  signerAddress: coldkey,
+  source: { currency: "urn:bittensor:mainnet:native", amount: 10_000_000_000n },      // 10 TAO
+  destination: { currency: "urn:bittensor:mainnet:alpha:64", address: hotkey },
+  limit: {
+    type: "LIMIT_BUY",
+    limitPrice: { value: 50_000_000n },   // rao of TAO per alpha; the trigger defaults to it
+    maxSlippage: 0.02,
+    expiresAt: new Date(Date.now() + 7 * 24 * 3600_000),   // optional: the service picks a default
+  },
+  signer: signInstruction,
+});
+```
+
+| `limit.type` | What it does | Amount |
+| --- | --- | --- |
+| `LIMIT_BUY` | Buys alpha when its price falls to `triggerPrice`, no worse than `limitPrice`. | `source.amount` (TAO) |
+| `TAKE_PROFIT`, `STOP_LOSS` | Sells alpha when its price rises / falls to `triggerPrice`. | `source.amount` (alpha) |
+| `LIMIT_BUY` + `stopLoss` / `takeProfit` | A linked plan: the buy, then exits on what it buys. | `source.amount` (TAO) |
+| `MARKET_BUY` + `stopLoss` / `takeProfit` | Buys now, with the same exits. | `source.amount` (TAO) |
+| `PROFIT_LOCK` + `stopLoss` / `takeProfit` | Exits on a stake you already hold. The service sizes it. | none |
+
+USD triggers: give `triggerPrice: { value, currency: "USD" }` (USD per alpha × 1e9) and leave out `limitPrice` and `maxSlippage`; the service fills at any price. On `MARKET_BUY` / `PROFIT_LOCK`, `currency: "USD"` makes the exits fire on the USD price. The environment must enable `USD_TRIGGER`.
+
+`stopLoss` and `takeProfit` are `{ percentage }`, a fraction (`0.1` is 10%) off the entry price. Which types an environment accepts is server config: a disabled one answers 422. A limit instruction is `RAW`: sign the bytes, or `<Bytes>` + `blake2_256(bytes)` + `</Bytes>` (what a browser extension's `signRaw` produces over the hash).
+
+**Plans sign one component at a time.** Registering the first signature answers `PENDING_SIGNATURES` with the next instruction in `order.nextSignature`; `submitAuthored` and `placeLimitOrder` call your `signer` again for each component until the plan is `OPEN`. `onComponentSigned(order, signed)` reports progress, and the signer's `context.component` (`{ signed, plan }`) says which component it is signing. The SDK signs only what the request asked for: one `RAW` component per exit leg after the entry (a Profit Lock's first leg is its first signature). Anything else throws `UnexpectedResponseError` before signing. Unsigned plans expire after a few minutes. To finish one by hand, `getOrder` it and pass its `nextSignature` with the signature to `submitComponent`.
+
+The authored order shows what the service resolved: the default expiry and each exit's `targetPrice`. A limit quote carries `rate` and `priceImpact` instead of `amount`, so `getQuote` is for market orders only.
+
+## Activity
+
+`listTransactions` returns the account's activity: its order-service orders and its other on-chain transactions (transfers, stakes made elsewhere), newest first. The account must be the token's wallet.
+
+```ts
+let page = await client.listTransactions(coldkey, { type: "swaps", netuid: 64, limit: 20 });
+while (page.nextCursor) page = await client.listTransactions(coldkey, { cursor: page.nextCursor });
+```
+
+A row from this service links to its order (`_links.order`). Rows appear once the chain history has them, so a just-placed order shows in `listOrders` first.
+
+## Playground
+
+`playground/` is a local web app that drives this SDK from source against dev or production: connect a seed phrase (kept in memory only) or any Polkadot extension, place market and limit orders, and watch the order history update. See [playground/README.md](playground/README.md).
 
 ## Errors
 
-Failures throw one of four classes:
+Failures throw one of five classes:
 
 | Class | When |
 | --- | --- |
 | `OrderServiceError` | The service answered with a problem (RFC 9457). Has `status`, `code`, `problem` (with `field` for a bad input) and `requestId`. |
 | `OrderServiceNetworkError` | No usable response: a network failure, a timeout, or an error that did not come from the service, such as the gateway rejecting a token. Has `status` when a response arrived. |
 | `PreflightError` | The authored order failed a pre-flight check, so the SDK did not ask for a signature. Has `warnings`. |
+| `UnexpectedResponseError` | The service answered 2xx with something the SDK cannot act on: a missing `X-Provenance-Token`, instruction or link, or a plan asking to sign more components than the order has exit legs, or a component that is not a `RAW` limit order. Nothing more is signed. |
 | `AuthenticationError` | Login, refresh or token exchange failed. `code` is `UNAUTHORIZED`, `HTTP_ERROR`, `NETWORK_ERROR` or `PROTOCOL`; `oauthError` carries the exchange's OAuth code. |
 
 `OrderServiceError.code` is the last segment of the problem type:
