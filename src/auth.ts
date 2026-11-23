@@ -30,6 +30,19 @@ export interface WalletAuthOptions {
   now?: () => number;
 }
 
+export interface ApiKeyAuthOptions {
+  /** Origin of the tao.com authentication service. Default `https://api.tao.com`; `https://api.dev.tao.com` for testnet. */
+  authBaseUrl?: string;
+  /** Key ID from the partner dashboard (a UUID). It becomes the token's `username`. */
+  apiKey: string;
+  /** The key's secret, shown once when the key was created. Keep it on a server. */
+  apiSecret: string;
+  /** Custom `fetch` (defaults to the global one). */
+  fetch?: FetchLike;
+  /** Clock, for tests. */
+  now?: () => number;
+}
+
 export interface DelegateOptions {
   /** The integration type the auth service should validate, see `exchangeToken`. */
   actorTokenType: string;
@@ -39,15 +52,19 @@ export interface DelegateOptions {
   params?: Record<string, string>;
 }
 
-export interface WalletAuth {
+/** A token source for `OrderServiceClient`'s `auth`. */
+export interface TokenAuth {
   /**
    * A valid access token: cached, refreshed, or freshly logged in as needed. Concurrent callers
-   * share one login. Pass to the client as `auth: () => walletAuth.getToken()`.
+   * share one login. Pass to the client as `auth: () => tokenAuth.getToken()`.
    */
   getToken(): Promise<string>;
-  /** Forget the session; the next `getToken` signs a fresh challenge. */
+  /** Forget the session; the next `getToken` logs in again. */
   reset(): void;
 }
+
+/** @deprecated Use `TokenAuth`. */
+export type WalletAuth = TokenAuth;
 
 // Lifetimes, as the tao.com apps use them. A refresh does not issue a new refresh token, so
 // once the refresh token nears the end of its life a full login replaces it.
@@ -98,7 +115,120 @@ function resolveAuthPath(tokenUri: string): string {
  *   POST <token_uri> {username, answer, session}      -> 200 {access_token, refresh_token, expires_in}
  *   POST /auth {type: REFRESH_TOKEN, username, refresh_token} -> 200 {access_token, expires_in}
  */
-export function createWalletAuth(options: WalletAuthOptions): WalletAuth {
+export function createWalletAuth(options: WalletAuthOptions): TokenAuth {
+  return createSessionAuth({
+    authBaseUrl: options.authBaseUrl,
+    username: options.address,
+    fetch: options.fetch,
+    now: options.now,
+    delegate: options.delegate,
+    async login(post, sessionFrom) {
+      const attempt = async (isRetry: boolean): Promise<Session> => {
+        // The service always answers 401 with the challenge, so 401 is the success path here.
+        const challenge = (await post("/auth", { type: "SS58_42", username: options.address }, [401])) as Challenge;
+        if (!challenge?.token_uri || !challenge.nonce || !challenge.session) {
+          throw new AuthenticationError("PROTOCOL", "malformed challenge response", { body: challenge });
+        }
+        const signature = await options.sign(base64UrlToBytes(challenge.nonce));
+        const answer = signature.startsWith("0x") ? signature : `0x${signature}`;
+        try {
+          const tokens = await post(
+            resolveAuthPath(challenge.token_uri),
+            { username: options.address, answer, session: challenge.session },
+            [200],
+          );
+          return sessionFrom(tokens as TokenResponse);
+        } catch (error) {
+          // 409: the wallet was registered after this challenge was issued (a concurrent first
+          // login). A fresh challenge is now the existing-user one, so start over once.
+          if (error instanceof AuthenticationError && error.status === 409 && !isRetry) return attempt(true);
+          throw error;
+        }
+      };
+      return attempt(false);
+    },
+  });
+}
+
+/**
+ * API-key login for partner apps (a key from the TAO.com partner dashboard), with token caching and
+ * refresh.
+ *
+ *   POST /auth {type: API_KEY, username: apiKey, password: apiSecret} -> 200 {access_token, refresh_token, expires_in}
+ *   POST /auth {type: REFRESH_TOKEN, username: apiKey, refresh_token}  -> 200 {access_token, expires_in}
+ *
+ * Orders you register with this token are attributed to the partner ID you set in the partner
+ * dashboard: the order service reads it from the key, so you pass nothing for it.
+ *
+ * The app authenticates with the key; your users' wallets still sign every order (`signer`). With
+ * this token the order service lets you author and register orders for any wallet, and read and
+ * finish the orders you registered. Listing, cancelling and deleting a wallet's orders need the
+ * wallet's own token (`createWalletAuth`).
+ *
+ * @throws RangeError synchronously when `apiKey` or `apiSecret` is empty, when it runs in a browser page or
+ *   worker or in React Native, or when `authBaseUrl` isn't an absolute URL using https (http only for localhost).
+ */
+export function createApiKeyAuth(options: ApiKeyAuthOptions): TokenAuth {
+  if (!options.apiKey || !options.apiSecret) throw new RangeError("apiKey and apiSecret are required");
+  if (isBrowser()) {
+    throw new RangeError(
+      "createApiKeyAuth runs on a server only: in a browser the API secret is visible to your users. " +
+        "Get the token from your own backend and pass it to the client as `auth`.",
+    );
+  }
+  assertSecureOrigin(options.authBaseUrl ?? DEFAULT_AUTH_BASE_URL);
+  return createSessionAuth({
+    authBaseUrl: options.authBaseUrl,
+    username: options.apiKey,
+    fetch: options.fetch,
+    now: options.now,
+    async login(post, sessionFrom) {
+      const tokens = await post("/auth", { type: "API_KEY", username: options.apiKey, password: options.apiSecret }, [200]);
+      return sessionFrom(tokens as TokenResponse);
+    },
+  });
+}
+
+type Post = (path: string, body: unknown, expected: number[]) => Promise<unknown>;
+
+/** Client code that ships to users: a browser page or worker, React Native, or a browser-like test environment. */
+function isBrowser(): boolean {
+  const scope = globalThis as { window?: unknown; document?: unknown; importScripts?: unknown; navigator?: { product?: unknown } };
+  const page = typeof scope.window === "object" && scope.window !== null && typeof scope.document === "object";
+  return page || typeof scope.importScripts === "function" || scope.navigator?.product === "ReactNative";
+}
+
+/** The API secret is long-lived, so it only travels over HTTPS (plain HTTP only to this machine). */
+function assertSecureOrigin(authBaseUrl: string): void {
+  let url: URL;
+  try {
+    url = new URL(authBaseUrl);
+  } catch {
+    throw new RangeError("authBaseUrl must be an absolute URL");
+  }
+  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
+    throw new RangeError("authBaseUrl must use https (http is allowed for localhost only)");
+  }
+}
+
+/** A malformed reply may still hold live tokens: errors keep only which fields it had. */
+function redacted(reply: unknown): unknown {
+  return reply !== null && typeof reply === "object" ? { fields: Object.keys(reply) } : typeof reply;
+}
+
+interface SessionAuthCore {
+  authBaseUrl?: string | undefined;
+  /** Cognito username: sent with refreshes. */
+  username: string;
+  fetch?: FetchLike | undefined;
+  now?: (() => number) | undefined;
+  delegate?: DelegateOptions | undefined;
+  login(post: Post, sessionFrom: (tokens: TokenResponse) => Session): Promise<Session>;
+}
+
+/** Caching, refresh and the optional delegate exchange, shared by every login type. */
+function createSessionAuth(options: SessionAuthCore): TokenAuth {
   const doFetch: FetchLike = options.fetch ?? ((input, init) => fetch(input, init));
   const base = trimTrailingSlashes(options.authBaseUrl ?? DEFAULT_AUTH_BASE_URL);
   const now = options.now ?? Date.now;
@@ -139,7 +269,7 @@ export function createWalletAuth(options: WalletAuthOptions): WalletAuth {
 
   function sessionFrom(tokens: TokenResponse): Session {
     if (typeof tokens.access_token !== "string" || typeof tokens.refresh_token !== "string" || typeof tokens.expires_in !== "number") {
-      throw new AuthenticationError("PROTOCOL", "malformed token response", { body: tokens });
+      throw new AuthenticationError("PROTOCOL", "malformed token response", { body: redacted(tokens) });
     }
     const t = now();
     return {
@@ -150,43 +280,24 @@ export function createWalletAuth(options: WalletAuthOptions): WalletAuth {
     };
   }
 
-  async function login(isRetry = false): Promise<Session> {
-    // The service always answers 401 with the challenge, so 401 is the success path here.
-    const challenge = (await post("/auth", { type: "SS58_42", username: options.address }, [401])) as Challenge;
-    if (!challenge?.token_uri || !challenge.nonce || !challenge.session) {
-      throw new AuthenticationError("PROTOCOL", "malformed challenge response", { body: challenge });
-    }
-    const signature = await options.sign(base64UrlToBytes(challenge.nonce));
-    const answer = signature.startsWith("0x") ? signature : `0x${signature}`;
-    try {
-      const tokens = await post(
-        resolveAuthPath(challenge.token_uri),
-        { username: options.address, answer, session: challenge.session },
-        [200],
-      );
-      return sessionFrom(tokens as TokenResponse);
-    } catch (error) {
-      // 409: the wallet was registered after this challenge was issued (a concurrent first
-      // login). A fresh challenge is now the existing-user one, so start over once.
-      if (error instanceof AuthenticationError && error.status === 409 && !isRetry) return login(true);
-      throw error;
-    }
+  function login(): Promise<Session> {
+    return options.login(post, sessionFrom);
   }
 
   async function refresh(current: Session): Promise<Session> {
     const refreshed = (await post(
       "/auth",
-      { type: "REFRESH_TOKEN", username: options.address, refresh_token: current.refreshToken },
+      { type: "REFRESH_TOKEN", username: options.username, refresh_token: current.refreshToken },
       [200],
     )) as { access_token?: string; expires_in?: number };
     if (typeof refreshed?.access_token !== "string" || typeof refreshed.expires_in !== "number") {
-      throw new AuthenticationError("PROTOCOL", "malformed refresh response", { body: refreshed });
+      throw new AuthenticationError("PROTOCOL", "malformed refresh response", { body: redacted(refreshed) });
     }
     // No new refresh token is issued: keep the original and its issue time.
     return { ...current, accessToken: refreshed.access_token, expiresAt: now() + refreshed.expires_in * 1000 };
   }
 
-  async function renewWalletToken(): Promise<string> {
+  async function renewSessionToken(): Promise<string> {
     const t = now();
     const current = session;
     const accessValid = current !== undefined && current.accessToken !== "" && current.expiresAt - t > ACCESS_TOKEN_EXPIRY_BUFFER_MS;
@@ -226,12 +337,12 @@ export function createWalletAuth(options: WalletAuthOptions): WalletAuth {
       });
     let delegated;
     try {
-      delegated = await exchange(await renewWalletToken());
+      delegated = await exchange(await renewSessionToken());
     } catch (error) {
       // The service rejected the wallet token (revoked or expired early): sign in again and exchange once more.
       if (!(error instanceof AuthenticationError && error.oauthError === "invalid_grant")) throw error;
       session = undefined;
-      delegated = await exchange(await renewWalletToken());
+      delegated = await exchange(await renewSessionToken());
     }
     delegateToken = { accessToken: delegated.accessToken, expiresAt: now() + delegated.expiresIn * 1000 };
     return delegateToken.accessToken;
@@ -240,7 +351,7 @@ export function createWalletAuth(options: WalletAuthOptions): WalletAuth {
   return {
     getToken() {
       // One login, refresh or exchange at a time, however many requests ask at once.
-      inFlight ??= (options.delegate !== undefined ? renewDelegateToken(options.delegate) : renewWalletToken()).finally(() => {
+      inFlight ??= (options.delegate !== undefined ? renewDelegateToken(options.delegate) : renewSessionToken()).finally(() => {
         inFlight = undefined;
       });
       return inFlight;

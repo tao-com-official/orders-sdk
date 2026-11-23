@@ -8,8 +8,15 @@ export {
   PreflightError,
   UnexpectedResponseError,
 } from "./errors.js";
-export { createWalletAuth } from "./auth.js";
-export type { ChallengeSigner, DelegateOptions, WalletAuth, WalletAuthOptions } from "./auth.js";
+export { createApiKeyAuth, createWalletAuth } from "./auth.js";
+export type {
+  ApiKeyAuthOptions,
+  ChallengeSigner,
+  DelegateOptions,
+  TokenAuth,
+  WalletAuth,
+  WalletAuthOptions,
+} from "./auth.js";
 export { ACCESS_TOKEN_TYPE, exchangeToken, TOKEN_EXCHANGE_GRANT } from "./token-exchange.js";
 export type { DelegateToken, TokenExchangeOptions } from "./token-exchange.js";
 export type { Problem } from "./errors.js";
