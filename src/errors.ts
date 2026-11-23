@@ -84,3 +84,15 @@ export class AuthenticationError extends Error {
     this.oauthError = details.oauthError;
   }
 }
+
+/**
+ * The service answered 2xx but the response is not one the SDK can act on: a header or field it
+ * needs is missing, or a plan asks to sign something the request did not ask for. Nothing is
+ * signed after this is thrown.
+ */
+export class UnexpectedResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnexpectedResponseError";
+  }
+}
