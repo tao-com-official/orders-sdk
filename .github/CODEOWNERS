@@ -1,0 +1,25 @@
+# Owners for the files that decide how this repo is checked, reviewed and published, and for the
+# code that decides what a wallet signs and where tokens go (.github/funds-safety.json and
+# .github/security-review.md). Everything else has no owner on purpose. The last matching line wins.
+
+# CI, the publish workflow, the agent instructions and this file.
+/.github/                  @tao-com-official/devops
+/AGENTS.md                 @tao-com-official/devops
+/CLAUDE.md                 @tao-com-official/devops
+/.claude/                  @tao-com-official/devops
+/.agents/                  @tao-com-official/devops
+/.gitleaks*                @tao-com-official/devops
+
+# Signing, sessions and HTTP, amounts and fees, hotkeys (src/hotkeys.ts is in funds-safety.json).
+/src/auth.ts               @tao-com-official/devops
+/src/client.ts             @tao-com-official/devops
+/src/http.ts               @tao-com-official/devops
+/src/fees.ts               @tao-com-official/devops
+/src/slippage.ts           @tao-com-official/devops
+/src/token-exchange.ts     @tao-com-official/devops
+/src/hotkeys.ts            @tao-com-official/devops
+
+# Dependencies and what ships to npm.
+package.json               @tao-com-official/devops
+package-lock.json          @tao-com-official/devops
+/tsconfig.build.json       @tao-com-official/devops
